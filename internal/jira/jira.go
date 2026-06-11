@@ -79,6 +79,22 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 	}, nil
 }
 
+// Verify checks credentials with a lightweight authenticated call (/myself).
+func (c *Client) Verify() error {
+	req, _ := http.NewRequest(http.MethodGet, c.BaseURL+"/rest/api/2/myself", nil)
+	c.auth(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	return nil
+}
+
 // AddComment posts a plain-text comment on a ticket.
 func (c *Client) AddComment(key, body string) error {
 	u := fmt.Sprintf("%s/rest/api/2/issue/%s/comment", c.BaseURL, url.PathEscape(key))

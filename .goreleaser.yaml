@@ -1,0 +1,46 @@
+# GoReleaser config (Decision 17). Build/release with: goreleaser release --clean
+version: 2
+project_name: droidpilot
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: agent
+    binary: agent          # command is `agent`; project/formula is `droidpilot`
+    main: .
+    env:
+      - CGO_ENABLED=0       # pure-Go sqlite driver → static binaries
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/droidpilot/droidpilot/cmd.version={{.Version}}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+
+checksum:
+  name_template: "checksums.txt"
+
+# Ad-hoc codesigning of the macOS binaries (set up notarization separately if needed).
+# signs:
+#   - artifacts: binary
+
+brews:
+  - name: droidpilot
+    repository:
+      owner: droidpilot
+      name: homebrew-tap
+    homepage: "https://github.com/droidpilot/droidpilot"
+    description: "Autonomous Android ticket → PR agent"
+    license: "MIT"
+    install: |
+      bin.install "agent"
+    test: |
+      system "#{bin}/agent", "--version"
+
+release:
+  draft: false

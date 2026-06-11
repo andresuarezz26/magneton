@@ -83,6 +83,9 @@ func expand(p string) string {
 	return p
 }
 
+// Expand resolves a leading ~ to the user's home directory.
+func Expand(p string) string { return expand(p) }
+
 // Resolve picks the repo to act on. Empty repoPath returns the first configured repo.
 func (c *Config) Resolve(repoPath string) (*Repo, error) {
 	if len(c.Repos) == 0 {

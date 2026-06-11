@@ -13,7 +13,7 @@ a human to review and merge. It never auto-merges.
 
 - **Phase 1 — complete:** `agent run <TICKET>` — the thin end-to-end "one ticket → one PR" loop, including bounded self-correct retries.
 - **Phase 2 — complete:** background daemon (`agent start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `agent status` (+ `--watch`), Jira JQL polling + transition-on-claim, desktop notifications.
-- **Phase 3 — planned:** interactive `agent init` wizard, GoReleaser + Homebrew distribution.
+- **Phase 3 — complete:** interactive `agent init` wizard with connectivity check, `--version`, GoReleaser + Homebrew packaging.
 
 ## How it works (Phase 1 loop)
 
@@ -51,15 +51,28 @@ gate and the self-correct loop trustworthy rather than self-reported.
 
 ## Install / build
 
-Requires Go 1.24+, `git`, the `gh` CLI (for PRs), and an authenticated `claude` CLI.
+Requires `git`, the `gh` CLI (for PRs), and an authenticated `claude` CLI.
 
 ```bash
-go build -o agent .
+# Homebrew (release)
+brew install droidpilot/tap/droidpilot      # installs the `agent` binary
+
+# From source (Go 1.24+)
+make build            # → ./agent   (or: go build -o agent .)
+make install          # → $GOBIN/agent
 ```
+
+Maintainers cut releases with GoReleaser (`make snapshot` for a local dry run);
+`.goreleaser.yaml` builds static binaries for darwin/linux amd64/arm64 and
+publishes the Homebrew formula.
 
 ## Configuration
 
-`agent init` scaffolds `~/.agent/config.toml` and the templates:
+Run **`agent init`**. On a terminal it launches an interactive wizard (prompts
+for Jira URL/email, repo path, build/test commands, and tokens — stored in the
+OS keychain — then runs a connectivity check against Jira, git, `claude`, and
+`gh`). When stdin isn't a TTY (CI), it scaffolds a commented `~/.agent/config.toml`
+to edit by hand. Either way the config looks like:
 
 ```toml
 jira_base_url = "https://your-org.atlassian.net"

@@ -7,9 +7,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is overridden at release time via -ldflags -X.
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:           "agent",
 	Short:         "droidpilot — autonomous Android ticket → PR agent",
+	Version:       version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
