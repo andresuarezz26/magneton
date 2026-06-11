@@ -1,0 +1,12 @@
+# Binaries
+/agent
+/droidpilot
+*.exe
+
+# Go
+/vendor/
+*.test
+*.out
+
+# Local runtime data
+/.agent/
