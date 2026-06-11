@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/droidpilot/droidpilot/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
 // Send fires a native OS notification (best effort) and appends to daemon.log.

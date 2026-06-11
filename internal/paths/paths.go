@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 )
 
-// Root is ~/.agent (override with $DROIDPILOT_HOME, mainly for tests).
+// Root is ~/.agent (override with $MAGNETON_HOME, mainly for tests).
 func Root() string {
-	if v := os.Getenv("DROIDPILOT_HOME"); v != "" {
+	if v := os.Getenv("MAGNETON_HOME"); v != "" {
 		return v
 	}
 	home, _ := os.UserHomeDir()

@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/droidpilot/droidpilot/internal/config"
-	"github.com/droidpilot/droidpilot/internal/jira"
-	"github.com/droidpilot/droidpilot/internal/secrets"
+	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/jira"
+	"github.com/andresuarezz26/magneton/internal/secrets"
 )
 
 func init() {

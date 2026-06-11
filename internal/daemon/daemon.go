@@ -9,15 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/droidpilot/droidpilot/internal/config"
-	"github.com/droidpilot/droidpilot/internal/git"
-	"github.com/droidpilot/droidpilot/internal/jira"
-	"github.com/droidpilot/droidpilot/internal/notify"
-	"github.com/droidpilot/droidpilot/internal/paths"
-	"github.com/droidpilot/droidpilot/internal/runner"
-	"github.com/droidpilot/droidpilot/internal/secrets"
-	"github.com/droidpilot/droidpilot/internal/store"
-	"github.com/droidpilot/droidpilot/internal/vcs"
+	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/git"
+	"github.com/andresuarezz26/magneton/internal/jira"
+	"github.com/andresuarezz26/magneton/internal/notify"
+	"github.com/andresuarezz26/magneton/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/runner"
+	"github.com/andresuarezz26/magneton/internal/secrets"
+	"github.com/andresuarezz26/magneton/internal/store"
+	"github.com/andresuarezz26/magneton/internal/vcs"
 )
 
 // Run starts the poll loop and blocks until ctx is cancelled, then drains

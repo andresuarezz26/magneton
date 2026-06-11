@@ -11,15 +11,15 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/droidpilot/droidpilot/internal/config"
-	"github.com/droidpilot/droidpilot/internal/jira"
-	"github.com/droidpilot/droidpilot/internal/paths"
-	"github.com/droidpilot/droidpilot/internal/secrets"
-	"github.com/droidpilot/droidpilot/internal/vcs"
+	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/jira"
+	"github.com/andresuarezz26/magneton/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/secrets"
+	"github.com/andresuarezz26/magneton/internal/vcs"
 )
 
 // Non-interactive fallback (CI / piped stdin): a commented config to edit by hand.
-const sampleConfig = `# droidpilot config — ~/.agent/config.toml
+const sampleConfig = `# magneton config — ~/.agent/config.toml
 jira_base_url = "https://your-org.atlassian.net"
 jira_email    = "you@your-org.com"
 poll_interval = 30
@@ -40,7 +40,7 @@ max_retries = 3
 func init() {
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "init",
-		Short: "Set up droidpilot (interactive wizard; scaffolds a config when non-interactive)",
+		Short: "Set up magneton (interactive wizard; scaffolds a config when non-interactive)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if err := paths.EnsureDirs(); err != nil {
 				return err
@@ -67,7 +67,7 @@ func scaffoldConfig() error {
 		fmt.Printf("• config already exists at %s\n", cfgPath)
 	}
 	fmt.Println("✓ templates in", paths.Templates())
-	fmt.Println("\nNext: set DROIDPILOT_JIRA_TOKEN, run `gh auth login`, then `agent run <TICKET>`.")
+	fmt.Println("\nNext: set MAGNETON_JIRA_TOKEN, run `gh auth login`, then `agent run <TICKET>`.")
 	return nil
 }
 
@@ -81,7 +81,7 @@ func wizard() error {
 		}
 	}
 
-	fmt.Println("\ndroidpilot setup\n────────────────")
+	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 	cfg.JiraBaseURL = strings.TrimRight(ask(r, "Jira base URL", "https://your-org.atlassian.net"), "/")
 	cfg.JiraEmail = ask(r, "Jira email", "")

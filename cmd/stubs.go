@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/droidpilot/droidpilot/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
 func init() {

@@ -1,7 +1,7 @@
 // Package secrets reads long-lived tokens (Decision 14: OS keychain, env-var fallback).
 //
 // On macOS it shells out to the `security` CLI so we don't pull in a cgo/keychain
-// dependency. Env vars ($DROIDPILOT_<KEY>_TOKEN) always win, for headless/CI use.
+// dependency. Env vars ($MAGNETON_<KEY>_TOKEN) always win, for headless/CI use.
 package secrets
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const service = "droidpilot"
+const service = "magneton"
 
 // Logical secret keys.
 const (
@@ -21,7 +21,7 @@ const (
 )
 
 func envName(key string) string {
-	return "DROIDPILOT_" + strings.ToUpper(key) + "_TOKEN"
+	return "MAGNETON_" + strings.ToUpper(key) + "_TOKEN"
 }
 
 // Get returns the secret for key: env var first, then the OS keychain.

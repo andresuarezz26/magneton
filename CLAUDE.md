@@ -1,4 +1,4 @@
-# droidpilot — repo conventions
+# magneton — repo conventions
 
 Greenfield Go project. Autonomous Android **ticket → PR** agent. See
 `.context/attachments/jIQXSc/plan-handoff.md` for the binding spec and decisions.

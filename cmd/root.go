@@ -12,7 +12,7 @@ var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:           "agent",
-	Short:         "droidpilot — autonomous Android ticket → PR agent",
+	Short:         "magneton — autonomous Android ticket → PR agent",
 	Version:       version,
 	SilenceUsage:  true,
 	SilenceErrors: true,

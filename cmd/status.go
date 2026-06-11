@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/droidpilot/droidpilot/internal/paths"
-	"github.com/droidpilot/droidpilot/internal/store"
+	"github.com/andresuarezz26/magneton/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/store"
 )
 
 func init() {

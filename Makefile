@@ -1,5 +1,5 @@
 VERSION ?= dev
-LDFLAGS := -s -w -X github.com/droidpilot/droidpilot/cmd.version=$(VERSION)
+LDFLAGS := -s -w -X github.com/andresuarezz26/magneton/cmd.version=$(VERSION)
 
 .PHONY: build install test vet lint snapshot clean
 

@@ -6,12 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/droidpilot/droidpilot/internal/config"
-	"github.com/droidpilot/droidpilot/internal/jira"
-	"github.com/droidpilot/droidpilot/internal/paths"
-	"github.com/droidpilot/droidpilot/internal/runner"
-	"github.com/droidpilot/droidpilot/internal/secrets"
-	"github.com/droidpilot/droidpilot/internal/store"
+	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/jira"
+	"github.com/andresuarezz26/magneton/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/runner"
+	"github.com/andresuarezz26/magneton/internal/secrets"
+	"github.com/andresuarezz26/magneton/internal/store"
 )
 
 var (

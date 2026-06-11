@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/droidpilot/droidpilot/cmd"
+	"github.com/andresuarezz26/magneton/cmd"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/droidpilot/droidpilot/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
 // PRData is the template context for both the PR body and the Jira comment.
@@ -40,7 +40,7 @@ Ticket: {{.Ticket}} · Branch: {{.Branch}}
 ## Checks
 {{.Tests}}
 
-🤖 Generated autonomously by droidpilot · review before merge
+🤖 Generated autonomously by magneton · review before merge
 `
 
 const defaultJiraComment = `✅ PR ready for review → {{.PRURL}}
@@ -73,7 +73,7 @@ func RenderJiraComment(d PRData) (string, error) {
 
 // OpenPR creates a PR with gh and returns its URL.
 func OpenPR(worktreeDir, base, title, body string) (string, error) {
-	tmp, err := os.CreateTemp("", "droidpilot-pr-*.md")
+	tmp, err := os.CreateTemp("", "magneton-pr-*.md")
 	if err != nil {
 		return "", err
 	}

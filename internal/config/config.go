@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/droidpilot/droidpilot/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
 // Repo is one registered Android repository.

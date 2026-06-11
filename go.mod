@@ -1,4 +1,4 @@
-module github.com/droidpilot/droidpilot
+module github.com/andresuarezz26/magneton
 
 go 1.26.2
 

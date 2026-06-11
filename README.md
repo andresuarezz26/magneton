@@ -1,4 +1,4 @@
-# droidpilot
+# magneton
 
 Autonomous **Android ticket → PR** agent. A local tool that turns a Jira ticket
 into a review-ready pull request: it provisions an isolated git worktree, drives
@@ -55,7 +55,7 @@ Requires `git`, the `gh` CLI (for PRs), and an authenticated `claude` CLI.
 
 ```bash
 # Homebrew (release)
-brew install droidpilot/tap/droidpilot      # installs the `agent` binary
+brew install magneton/tap/magneton      # installs the `agent` binary
 
 # From source (Go 1.24+)
 make build            # → ./agent   (or: go build -o agent .)
