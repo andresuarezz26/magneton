@@ -120,7 +120,12 @@ agent stop                 # graceful shutdown (drains in-flight sessions)
 The daemon polls each repo's `jql` every `poll_interval` seconds, atomically
 claims new tickets (so none is processed twice), transitions them to *In
 Progress*, runs up to `concurrency` sessions at once, and fires a desktop
-notification when a ticket reaches `review` or `needs-you`.
+notification when a ticket reaches `review` or `needs-you`. On each cycle it also
+checks open PRs and, once a PR is **merged or closed**, removes that ticket's
+worktree and marks it `merged`/`closed` (Decision 7).
+
+`agent start --once` polls a single cycle, runs whatever it claims, then exits —
+ideal for a first live test without leaving a daemon running.
 
 Runtime data lives under `~/.agent/`: `config.toml`, `worktrees/<ticket>/`,
 `logs/<ticket>.log`, `templates/`, and (Phase 2) `state.db`.
@@ -131,9 +136,12 @@ Runtime data lives under `~/.agent/`: `config.toml`, `worktrees/<ticket>/`,
   worktree (the session's cwd).
 - `--dry-run` performs edits + build but never pushes or opens a PR.
 - `max_budget_usd` caps per-session cost.
-- **Known MVP limitation:** the `Bash` tool is currently allowed broadly, so a
-  session *can* read outside its worktree. Tighten `allowed_tools` (e.g.
-  `Bash(./gradlew:*)`) before unattended use on a sensitive repo.
+- The default `allowed_tools` is **scoped**: file edits plus the Gradle wrapper
+  and read-only commands (`ls`/`cat`/`grep`/`git status` …) — no arbitrary
+  `Bash`, so a misfire can't run destructive or network commands. Widen it in
+  config if a repo needs more.
+- *Residual:* read commands can still reference paths outside the worktree; full
+  filesystem confinement needs an OS sandbox (a later hardening step).
 
 ## How to test
 
@@ -185,15 +193,65 @@ same Claude session and route to `needs-you` after exhausting retries.
 > `DROIDPILOT_HOME` overrides the `~/.agent` location — use it to keep tests
 > isolated from your real config.
 
-### 3. Real Jira + real repo
+### 3. Real Jira + real repo (live run)
 
-Edit `~/.agent/config.toml` with your Jira URL/email and a real Android
-`[[repo]]`, set `DROIDPILOT_JIRA_TOKEN`, run `gh auth login`, then:
+This is the end-to-end live test. ~10 minutes of setup.
 
+**Prerequisites**
+- A Jira Cloud site + project. Create an API token at
+  <https://id.atlassian.com/manage-profile/security/api-tokens>.
+- A clone of your Android repo with a pushable `origin` (GitHub) and
+  `gh auth login` done. `gh repo view` should work from inside it.
+- An authenticated `claude` (`claude --version` works).
+
+**1 — Configure.** Run the wizard (or edit `~/.agent/config.toml`):
 ```bash
-./agent run PROJ-123 --dry-run     # inspect the worktree first
-./agent run PROJ-123               # opens a real PR
+agent init
+# Jira base URL  → https://YOURORG.atlassian.net
+# Jira email     → you@yourorg.com
+# Repository     → /abs/path/to/android-repo
+# Compile        → ./gradlew :app:compileDebug   (your real module)
+# Test           → ./gradlew testDebugUnitTest
+# JQL            → labels = ai-agent AND status = "To Do"
+# Jira API token → (stored in keychain)
 ```
+The wizard ends with a connectivity check — make sure Jira/git/claude/gh are all ✓.
+
+**2 — Seed one safe ticket.** In Jira, create a small, well-scoped chore (e.g.
+"bump library X to version Y" or "fix this lint warning"), give it the
+`ai-agent` label, and leave it in **To Do** so your JQL matches it.
+
+**3 — Single-ticket dry run first (no PR, no Jira writes):**
+```bash
+agent run PROJ-123 --dry-run
+git -C ~/.agent/worktrees/PROJ-123 diff      # inspect what it changed
+agent logs PROJ-123
+```
+
+**4 — Real single ticket (opens a PR + comments on the ticket):**
+```bash
+agent run PROJ-123
+```
+Expect: branch pushed, PR opened, a comment with the PR link on the ticket, and
+the session left at `review` (never auto-merged).
+
+**5 — Exercise the daemon for one cycle (polls your JQL, claims, transitions):**
+```bash
+agent start --once     # claims matching tickets, runs them, then exits
+agent status           # see the fleet
+```
+When you later **merge or close** that PR, the next `agent start` (or
+`agent start --once`) reclaims its worktree and marks it `merged`/`closed`.
+
+**6 — Leave it running unattended:**
+```bash
+agent start &          # or: nohup agent start >/dev/null 2>&1 &
+agent status --watch
+agent stop
+```
+
+> Tip: keep `concurrency` low (1–2) and `max_budget_usd` modest for the first
+> real runs, and start with `wedge`-type tickets (scoped bugs & chores).
 
 ## Roadmap
 

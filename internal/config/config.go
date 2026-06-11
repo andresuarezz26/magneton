@@ -58,10 +58,16 @@ func (c *Config) applyDefaults() {
 		c.MaxBudgetUSD = 5
 	}
 	if c.AllowedTools == "" {
-		// Scoped allowlist (Decision 16). Writes are further confined to the
-		// worktree because the session's cwd is the worktree. Bash is broad for
-		// the MVP; tighten to Bash(./gradlew:*) etc. once flows stabilize.
-		c.AllowedTools = "Edit Write Read Glob Grep MultiEdit Bash TodoWrite"
+		// Scoped allowlist (Decision 16): file edits within the worktree plus the
+		// Gradle wrapper and read-only inspection commands — no arbitrary Bash, so
+		// a misfire can't run destructive or network commands. Teams can widen
+		// this in config if a repo needs more. (Note: read commands like `cat` can
+		// still reach paths outside the worktree; full FS confinement needs a
+		// sandbox, which is a later hardening step.)
+		c.AllowedTools = "Edit Write Read Glob Grep MultiEdit TodoWrite " +
+			"Bash(./gradlew:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) " +
+			"Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(git status:*) " +
+			"Bash(git diff:*) Bash(git log:*) Bash(git show:*)"
 	}
 	for i := range c.Repos {
 		r := &c.Repos[i]

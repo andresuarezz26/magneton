@@ -21,6 +21,9 @@ const (
 	StateReview   = "review"
 	StateNeedsYou = "needs-you"
 	StateFailed   = "failed"
+	// Terminal post-review states set when the PR is resolved (Decision 7 cleanup).
+	StateMerged = "merged"
+	StateClosed = "closed"
 )
 
 // Session is one ticket's row.

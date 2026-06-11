@@ -10,17 +10,20 @@ import (
 	"time"
 
 	"github.com/droidpilot/droidpilot/internal/config"
+	"github.com/droidpilot/droidpilot/internal/git"
 	"github.com/droidpilot/droidpilot/internal/jira"
 	"github.com/droidpilot/droidpilot/internal/notify"
 	"github.com/droidpilot/droidpilot/internal/paths"
 	"github.com/droidpilot/droidpilot/internal/runner"
 	"github.com/droidpilot/droidpilot/internal/secrets"
 	"github.com/droidpilot/droidpilot/internal/store"
+	"github.com/droidpilot/droidpilot/internal/vcs"
 )
 
 // Run starts the poll loop and blocks until ctx is cancelled, then drains
-// in-flight sessions before returning.
-func Run(ctx context.Context, cfg *config.Config) error {
+// in-flight sessions before returning. When once is true it polls a single
+// cycle, waits for the claimed tickets, and returns (handy for live testing).
+func Run(ctx context.Context, cfg *config.Config, once bool) error {
 	if err := paths.EnsureDirs(); err != nil {
 		return err
 	}
@@ -37,6 +40,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	logf("daemon started · concurrency %d · poll %ds", cfg.Concurrency, cfg.PollInterval)
 
 	poll := func() {
+		cleanupResolved(st) // reclaim worktrees for merged/closed PRs (Decision 7)
 		for i := range cfg.Repos {
 			repo := &cfg.Repos[i]
 			if repo.JQL == "" {
@@ -75,6 +79,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	poll() // poll once immediately on start
+
+	if once {
+		wg.Wait()
+		cleanupResolved(st)
+		logf("once: cycle complete")
+		return nil
+	}
+
 	ticker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
 	for {
@@ -86,6 +98,38 @@ func Run(ctx context.Context, cfg *config.Config) error {
 			return nil
 		case <-ticker.C:
 			poll()
+		}
+	}
+}
+
+// cleanupResolved removes the worktree and marks the session merged/closed once
+// its PR is no longer open (Decision 7).
+func cleanupResolved(st *store.Store) {
+	sessions, err := st.List()
+	if err != nil {
+		return
+	}
+	for _, s := range sessions {
+		if s.State != store.StateReview || s.PRURL == "" || s.Repo == "" {
+			continue
+		}
+		state, err := vcs.PRState(s.Repo, s.PRURL)
+		if err != nil {
+			continue // PR not resolvable right now; try again next poll
+		}
+		switch state {
+		case "MERGED", "CLOSED":
+			if s.Worktree != "" {
+				if err := git.RemoveWorktree(s.Repo, s.Worktree); err != nil {
+					logf("[%s] (warn) worktree cleanup: %v", s.Ticket, err)
+				}
+			}
+			next := store.StateClosed
+			if state == "MERGED" {
+				next = store.StateMerged
+			}
+			_ = st.SetState(s.Ticket, next, s.Retries)
+			logf("[%s] %s — worktree reclaimed", s.Ticket, next)
 		}
 	}
 }

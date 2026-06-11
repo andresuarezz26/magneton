@@ -97,6 +97,18 @@ func OpenPR(worktreeDir, base, title, body string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// PRState returns the PR's state via gh: "OPEN", "MERGED", or "CLOSED".
+// repoDir gives gh the repository context.
+func PRState(repoDir, prURL string) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", prURL, "--json", "state", "-q", ".state")
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("gh pr view: %w\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // WriteDefaultTemplates drops the default templates if they don't exist yet.
 func WriteDefaultTemplates() error {
 	defaults := map[string]string{

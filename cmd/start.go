@@ -16,7 +16,8 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(&cobra.Command{
+	var once bool
+	startCmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the daemon: poll Jira and run the fleet (foreground; background with &)",
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -39,9 +40,11 @@ func init() {
 
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			return daemon.Run(ctx, cfg)
+			return daemon.Run(ctx, cfg, once)
 		},
-	})
+	}
+	startCmd.Flags().BoolVar(&once, "once", false, "poll a single cycle, run claimed tickets, then exit")
+	rootCmd.AddCommand(startCmd)
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "stop",
