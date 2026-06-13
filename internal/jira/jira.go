@@ -35,6 +35,7 @@ type Issue struct {
 	Key         string
 	Summary     string
 	Description string
+	Status      string // e.g. "To Do", "In Progress", "Done"
 }
 
 func (c *Client) auth(req *http.Request) {
@@ -50,7 +51,7 @@ func (c *Client) auth(req *http.Request) {
 
 // FetchIssue retrieves summary + description for a ticket key.
 func (c *Client) FetchIssue(key string) (*Issue, error) {
-	u := fmt.Sprintf("%s/rest/api/2/issue/%s?fields=summary,description", c.BaseURL, url.PathEscape(key))
+	u := fmt.Sprintf("%s/rest/api/2/issue/%s?fields=summary,description,status", c.BaseURL, url.PathEscape(key))
 	req, _ := http.NewRequest(http.MethodGet, u, nil)
 	c.auth(req)
 	resp, err := c.http.Do(req)
@@ -67,6 +68,9 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 		Fields struct {
 			Summary     string          `json:"summary"`
 			Description json.RawMessage `json:"description"`
+			Status      struct {
+				Name string `json:"name"`
+			} `json:"status"`
 		} `json:"fields"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -76,6 +80,7 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 		Key:         raw.Key,
 		Summary:     raw.Fields.Summary,
 		Description: flattenDesc(raw.Fields.Description),
+		Status:      raw.Fields.Status.Name,
 	}, nil
 }
 
@@ -109,6 +114,59 @@ func (c *Client) AddComment(key, body string) error {
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("jira comment %s: HTTP %d: %s", key, resp.StatusCode, truncate(string(b), 200))
+	}
+	return nil
+}
+
+// TransitionTo moves a ticket to the first available transition whose
+// destination status name matches targetStatus (case-insensitive).
+func (c *Client) TransitionTo(key, targetStatus string) error {
+	u := fmt.Sprintf("%s/rest/api/2/issue/%s/transitions", c.BaseURL, url.PathEscape(key))
+	req, _ := http.NewRequest(http.MethodGet, u, nil)
+	c.auth(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("jira transitions %s: HTTP %d: %s", key, resp.StatusCode, truncate(string(body), 300))
+	}
+	var payload struct {
+		Transitions []struct {
+			ID string `json:"id"`
+			To struct {
+				Name string `json:"name"`
+			} `json:"to"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return err
+	}
+	var id string
+	var available []string
+	for _, t := range payload.Transitions {
+		available = append(available, t.To.Name)
+		if strings.EqualFold(t.To.Name, targetStatus) {
+			id = t.ID
+		}
+	}
+	if id == "" {
+		return fmt.Errorf("no transition to %q for %s (available: %s) — set jira_in_progress_status in config",
+			targetStatus, key, strings.Join(available, ", "))
+	}
+	tBody, _ := json.Marshal(map[string]interface{}{"transition": map[string]string{"id": id}})
+	req2, _ := http.NewRequest(http.MethodPost, u, strings.NewReader(string(tBody)))
+	c.auth(req2)
+	resp2, err := c.http.Do(req2)
+	if err != nil {
+		return err
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp2.Body)
+		return fmt.Errorf("jira transition %s→%s: HTTP %d: %s", key, targetStatus, resp2.StatusCode, truncate(string(b), 200))
 	}
 	return nil
 }

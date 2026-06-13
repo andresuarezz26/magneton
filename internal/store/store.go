@@ -14,13 +14,16 @@ import (
 
 // Lifecycle states (Decision 9).
 const (
-	StateQueued   = "queued"
-	StateWorking  = "working"
-	StateBuilding = "building"
-	StateTesting  = "testing"
-	StateReview   = "review"
-	StateNeedsYou = "needs-you"
-	StateFailed   = "failed"
+	StateQueued    = "queued"
+	StatePlanning  = "planning"
+	StateAwaiting  = "awaiting-answer"
+	StateWorking   = "working"
+	StateReviewing = "reviewing"
+	StateBuilding  = "building"
+	StateTesting   = "testing"
+	StateReview    = "review"
+	StateNeedsYou  = "needs-you"
+	StateFailed    = "failed"
 	// Terminal post-review states set when the PR is resolved (Decision 7 cleanup).
 	StateMerged = "merged"
 	StateClosed = "closed"
@@ -36,6 +39,7 @@ type Session struct {
 	Worktree  string
 	PRURL     string
 	Summary   string
+	SessionID string // Claude session ID for cross-stage resume
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -53,6 +57,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   worktree   TEXT NOT NULL DEFAULT '',
   pr_url     TEXT NOT NULL DEFAULT '',
   summary    TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );`
@@ -67,6 +72,8 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Migrate: add session_id column to existing DBs (ignore "duplicate column" error).
+	db.Exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -98,6 +105,15 @@ func (s *Store) SetState(ticket, state string, retries int) error {
 	return err
 }
 
+// SetSessionID persists the Claude session ID for cross-stage resume.
+func (s *Store) SetSessionID(ticket, sessionID string) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET session_id=?, updated_at=? WHERE ticket=?`,
+		sessionID, time.Now().Unix(), ticket,
+	)
+	return err
+}
+
 // SetFields updates branch/worktree/pr_url (any empty string is left unchanged).
 func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 	_, err := s.db.Exec(
@@ -115,7 +131,7 @@ func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 // Get returns one session.
 func (s *Store) Get(ticket string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, created_at, updated_at
 		 FROM sessions WHERE ticket=?`, ticket)
 	return scan(row)
 }
@@ -123,7 +139,7 @@ func (s *Store) Get(ticket string) (*Session, error) {
 // List returns all sessions, most recently updated first.
 func (s *Store) List() ([]Session, error) {
 	rows, err := s.db.Query(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, created_at, updated_at
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -148,7 +164,7 @@ func scan(r scanner) (*Session, error) {
 	var s Session
 	var created, updated int64
 	if err := r.Scan(&s.Ticket, &s.Repo, &s.State, &s.Retries, &s.Branch,
-		&s.Worktree, &s.PRURL, &s.Summary, &created, &updated); err != nil {
+		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &created, &updated); err != nil {
 		return nil, err
 	}
 	s.CreatedAt = time.Unix(created, 0)

@@ -6,8 +6,8 @@ LDFLAGS := -s -w -X github.com/andresuarezz26/magneton/cmd.version=$(VERSION)
 build: ## build the `agent` binary
 	go build -ldflags "$(LDFLAGS)" -o agent .
 
-install: ## install to $GOBIN
-	go install -ldflags "$(LDFLAGS)" .
+install: ## build and install to ~/.local/bin/agent
+	go build -ldflags "$(LDFLAGS)" -o $(HOME)/.local/bin/agent .
 
 test: ## run tests
 	go test ./...

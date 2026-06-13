@@ -24,13 +24,17 @@ type Repo struct {
 
 // Config is the whole ~/.agent/config.toml.
 type Config struct {
-	JiraBaseURL  string  `toml:"jira_base_url"`
-	JiraEmail    string  `toml:"jira_email"`
-	PollInterval int     `toml:"poll_interval"`
-	Concurrency  int     `toml:"concurrency"`
-	AllowedTools string  `toml:"allowed_tools"`
-	MaxBudgetUSD float64 `toml:"max_budget_usd"`
-	Repos        []Repo  `toml:"repo"`
+	JiraBaseURL          string  `toml:"jira_base_url"`
+	JiraEmail            string  `toml:"jira_email"`
+	JiraInProgressStatus string  `toml:"jira_in_progress_status"`
+	PollInterval         int     `toml:"poll_interval"`
+	Concurrency          int     `toml:"concurrency"`
+	AllowedTools         string  `toml:"allowed_tools"`
+	MaxBudgetUSD         float64 `toml:"max_budget_usd"`
+	ModelPlan            string  `toml:"model_plan"`
+	ModelImpl            string  `toml:"model_impl"`
+	ModelReview          string  `toml:"model_review"`
+	Repos                []Repo  `toml:"repo"`
 }
 
 // Load reads and validates the config, applying defaults.
@@ -56,6 +60,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxBudgetUSD == 0 {
 		c.MaxBudgetUSD = 5
+	}
+	if c.ModelPlan == "" {
+		c.ModelPlan = "claude-haiku-4-5-20251001"
+	}
+	if c.ModelImpl == "" {
+		c.ModelImpl = "claude-haiku-4-5-20251001"
+	}
+	if c.ModelReview == "" {
+		c.ModelReview = "claude-haiku-4-5-20251001"
+	}
+	if c.JiraInProgressStatus == "" {
+		c.JiraInProgressStatus = "In Progress"
 	}
 	if c.AllowedTools == "" {
 		// Scoped allowlist (Decision 16): file edits within the worktree plus the

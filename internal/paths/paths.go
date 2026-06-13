@@ -24,7 +24,7 @@ func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
 func PidFile() string    { return filepath.Join(Root(), "daemon.pid") }
 
 func WorktreeFor(ticket string) string   { return filepath.Join(Worktrees(), ticket) }
-func GradleHomeFor(ticket string) string { return filepath.Join(WorktreeFor(ticket), ".gradle-home") }
+func GradleHomeFor(_ string) string      { return filepath.Join(Root(), ".gradle-home") }
 func LogFor(ticket string) string        { return filepath.Join(Logs(), ticket+".log") }
 
 // EnsureDirs creates the directory skeleton if missing.

@@ -14,6 +14,17 @@ import (
 	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
+// PlanData is the template context for the plan Jira comment.
+type PlanData struct {
+	Ticket     string
+	Summary    string
+	Plan       string
+	Steps      []string
+	Questions  []string
+	Confidence string
+	Type       string
+}
+
 // PRData is the template context for both the PR body and the Jira comment.
 type PRData struct {
 	Ticket       string
@@ -47,7 +58,23 @@ const defaultJiraComment = `✅ PR ready for review → {{.PRURL}}
 {{.Tests}} · {{.Attempts}} attempt(s)
 `
 
-func render(name, def string, data PRData) (string, error) {
+const defaultPlanComment = `🤖 magneton plan for [{{.Ticket}}] {{.Summary}}
+
+*Approach:* {{.Plan}}
+*Type:* {{.Type}} · *Confidence:* {{.Confidence}}
+
+*Steps:*
+{{range .Steps}}- {{.}}
+{{end}}
+{{- if .Questions}}
+*Questions before I start — please reply to this comment:*
+{{range .Questions}}- {{.}}
+{{end}}
+{{- else}}
+No blockers — proceeding with implementation automatically.
+{{- end}}`
+
+func render(name, def string, data any) (string, error) {
 	text := def
 	if b, err := os.ReadFile(filepath.Join(paths.Templates(), name)); err == nil {
 		text = string(b)
@@ -69,6 +96,11 @@ func RenderPRBody(d PRData) (string, error) { return render("pr_body.tmpl", defa
 // RenderJiraComment renders the ticket comment.
 func RenderJiraComment(d PRData) (string, error) {
 	return render("jira_comment.tmpl", defaultJiraComment, d)
+}
+
+// RenderPlanComment renders the plan stage Jira comment.
+func RenderPlanComment(d PlanData) (string, error) {
+	return render("plan_comment.tmpl", defaultPlanComment, d)
 }
 
 // OpenPR creates a PR with gh and returns its URL.
@@ -114,6 +146,7 @@ func WriteDefaultTemplates() error {
 	defaults := map[string]string{
 		"pr_body.tmpl":      defaultPRBody,
 		"jira_comment.tmpl": defaultJiraComment,
+		"plan_comment.tmpl": defaultPlanComment,
 	}
 	for name, def := range defaults {
 		p := filepath.Join(paths.Templates(), name)

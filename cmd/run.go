@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -70,6 +71,12 @@ func runE(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("fetch ticket: %w", err)
 		}
 		summary, desc = issue.Summary, issue.Description
+		if !strings.EqualFold(issue.Status, cfg.JiraInProgressStatus) {
+			logf("[%s] status is %q — transitioning to %q", ticket, issue.Status, cfg.JiraInProgressStatus)
+			if err := jc.TransitionTo(ticket, cfg.JiraInProgressStatus); err != nil {
+				logf("[%s] (warn) could not transition to %q: %v", ticket, cfg.JiraInProgressStatus, err)
+			}
+		}
 	}
 	logf("[%s] %s", ticket, summary)
 

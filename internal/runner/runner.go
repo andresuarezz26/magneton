@@ -43,7 +43,8 @@ type Outcome struct {
 	Err   error
 }
 
-// Run executes the full pipeline for one ticket.
+// Run executes the full staged pipeline for one ticket:
+// PLAN → CLARIFY → IMPLEMENT → SELF-REVIEW → GATE → PR
 func Run(t Task, h Hooks) Outcome {
 	logf := h.Logf
 	if logf == nil {
@@ -62,9 +63,10 @@ func Run(t Task, h Hooks) Outcome {
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(t.Ticket)
 	gradleHome := paths.GradleHomeFor(t.Ticket)
+	anthropicKey := secrets.Get(secrets.Anthropic)
 
 	// 1. Provision an isolated worktree (Decision 7).
-	setState(store.StateWorking, 0)
+	setState(store.StatePlanning, 0)
 	logf("[%s] worktree %s on %s", t.Ticket, worktree, branch)
 	if err := git.CreateWorktree(repo.Path, worktree, branch, repo.Base); err != nil {
 		setState(store.StateFailed, 0)
@@ -74,19 +76,82 @@ func Run(t Task, h Hooks) Outcome {
 		h.OnField(branch, worktree, "")
 	}
 
-	// 2. Drive the agent.
-	opts := agent.Options{
+	// 2. PLAN stage — strong model, read-only tools.
+	modelPlan := t.Cfg.ModelPlan
+	modelImpl := t.Cfg.ModelImpl
+	modelReview := t.Cfg.ModelReview
+	logf("[%s] stage:plan model:%s", t.Ticket, modelPlan)
+	planOpts := agent.Options{
 		WorktreeDir:  worktree,
-		AllowedTools: t.Cfg.AllowedTools,
+		AllowedTools: agent.PlanTools,
+		Model:        modelPlan,
 		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
-		AnthropicKey: secrets.Get(secrets.Anthropic),
+		AnthropicKey: anthropicKey,
 		Logf:         logf,
 	}
-	logf("[%s] working → driving claude code", t.Ticket)
+	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, t.Description), planOpts); err != nil {
+		logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+	}
+
+	plan, err := agent.ReadPlan(worktree)
+	if err != nil {
+		logf("[%s] needs-you: plan stage did not produce plan.json (%v)", t.Ticket, err)
+		setState(store.StateNeedsYou, 0)
+		return Outcome{State: store.StateNeedsYou}
+	}
+	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
+
+	// Resolve compile/test commands: config wins if set, otherwise use plan's discovered commands.
+	compileCmd := repo.Compile
+	if compileCmd == "" {
+		compileCmd = plan.CompileCmd
+	}
+	testCmd := repo.Test
+	if testCmd == "" {
+		testCmd = plan.TestCmd
+	}
+	if compileCmd != "" {
+		logf("[%s] compile: %s", t.Ticket, compileCmd)
+	}
+	if testCmd != "" {
+		logf("[%s] test:    %s", t.Ticket, testCmd)
+	}
+
+	// 3. CLARIFY — always post plan to Jira; stop if there are blocking questions.
+	if h.Comment != nil {
+		if comment, cerr := vcs.RenderPlanComment(vcs.PlanData{
+			Ticket: t.Ticket, Summary: t.Summary,
+			Plan: plan.Plan, Steps: plan.Steps, Questions: plan.Questions,
+			Confidence: plan.Confidence, Type: plan.Type,
+		}); cerr == nil {
+			h.Comment(comment)
+		}
+	}
+	if len(plan.Questions) > 0 {
+		logf("[%s] awaiting-answer: %d question(s) posted to ticket", t.Ticket, len(plan.Questions))
+		for i, q := range plan.Questions {
+			logf("[%s]   Q%d: %s", t.Ticket, i+1, q)
+		}
+		setState(store.StateAwaiting, 0)
+		return Outcome{State: store.StateAwaiting}
+	}
+
+	// 4. IMPLEMENT stage — fast model, full tools, plan injected.
+	setState(store.StateWorking, 0)
+	logf("[%s] stage:implement model:%s", t.Ticket, modelImpl)
+	implOpts := agent.Options{
+		WorktreeDir:  worktree,
+		AllowedTools: t.Cfg.AllowedTools,
+		Model:        modelImpl,
+		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
+		AnthropicKey: anthropicKey,
+		Logf:         logf,
+	}
 	sessionID, runErr := agent.Run(
-		agent.BuildPrompt(t.Ticket, t.Summary, t.Description, repo.Compile, repo.Test), opts)
+		agent.BuildImplPrompt(t.Ticket, t.Summary, t.Description, plan, compileCmd, testCmd),
+		implOpts)
 	if runErr != nil {
-		logf("[%s] (warn) claude exited: %v", t.Ticket, runErr)
+		logf("[%s] (warn) implement stage exited: %v", t.Ticket, runErr)
 	}
 
 	report, err := agent.ReadReport(worktree)
@@ -100,17 +165,46 @@ func Run(t Task, h Hooks) Outcome {
 		setState(store.StateNeedsYou, 0)
 		return Outcome{State: store.StateNeedsYou}
 	}
-	logf("[%s] agent done: %s", t.Ticket, report.Summary)
+	logf("[%s] implement done: %s", t.Ticket, report.Summary)
 
-	// 3. Build gate with bounded self-correct (Decision 4).
+	// 5. SELF-REVIEW — adversarial diff review; one fix round if issues found.
+	setState(store.StateReviewing, 0)
+	logf("[%s] stage:review model:%s", t.Ticket, modelReview)
+	reviewOpts := agent.Options{
+		WorktreeDir:  worktree,
+		AllowedTools: agent.ReviewTools,
+		Model:        modelReview,
+		MaxBudgetUSD: t.Cfg.MaxBudgetUSD * 0.3,
+		AnthropicKey: anthropicKey,
+		Logf:         logf,
+	}
+	if _, err := agent.Run(agent.BuildReviewPrompt(t.Ticket, t.Summary, plan), reviewOpts); err != nil {
+		logf("[%s] (warn) review stage exited: %v", t.Ticket, err)
+	}
+	if review, err := agent.ReadReview(worktree); err != nil {
+		logf("[%s] (warn) no review.json — skipping self-review gate", t.Ticket)
+	} else if review.Verdict == "fix" && len(review.Issues) > 0 {
+		logf("[%s] self-review: %d issue(s) — applying one fix round", t.Ticket, len(review.Issues))
+		fixOpts := implOpts
+		fixOpts.ResumeID = sessionID
+		if sid, ferr := agent.Run(agent.BuildReviewFixPrompt(review.Issues), fixOpts); ferr != nil {
+			logf("[%s] (warn) fix round exited: %v", t.Ticket, ferr)
+		} else if sid != "" {
+			sessionID = sid
+		}
+	} else {
+		logf("[%s] self-review: pass ✓", t.Ticket)
+	}
+
+	// 6. Build gate with bounded self-correct (Decision 4).
 	attempts := 1
 	gate := func() build.Result {
 		setState(store.StateBuilding, attempts-1)
-		if r := build.Step(worktree, gradleHome, repo.Compile, "compile"); !r.OK {
+		if r := build.Step(worktree, gradleHome, compileCmd, "compile"); !r.OK {
 			return r
 		}
 		setState(store.StateTesting, attempts-1)
-		return build.Step(worktree, gradleHome, repo.Test, "test")
+		return build.Step(worktree, gradleHome, testCmd, "test")
 	}
 	for {
 		res := gate()
@@ -125,16 +219,16 @@ func Run(t Task, h Hooks) Outcome {
 			return Outcome{State: store.StateNeedsYou}
 		}
 		attempts++
-		opts.ResumeID = sessionID
+		implOpts.ResumeID = sessionID
 		logf("[%s] feeding %s errors back to session", t.Ticket, res.Phase)
-		if sid, err := agent.Run(agent.BuildRetryPrompt(res.Phase, res.Output), opts); err != nil {
+		if sid, err := agent.Run(agent.BuildRetryPrompt(res.Phase, res.Output), implOpts); err != nil {
 			logf("[%s] (warn) claude retry exited: %v", t.Ticket, err)
 		} else if sid != "" {
 			sessionID = sid
 		}
 	}
 
-	// 4. Commit anything left uncommitted.
+	// 7. Commit anything left uncommitted.
 	if git.HasChanges(worktree) {
 		if err := git.CommitAll(worktree, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary)); err != nil {
 			setState(store.StateFailed, attempts-1)
@@ -148,7 +242,7 @@ func Run(t Task, h Hooks) Outcome {
 		return Outcome{State: store.StateReview}
 	}
 
-	// 5. Push + open PR (human-gated; never auto-merge).
+	// 8. Push + open PR (human-gated; never auto-merge).
 	base := repo.Base
 	if base == "" {
 		base = git.DefaultBranch(repo.Path)
@@ -179,7 +273,7 @@ func Run(t Task, h Hooks) Outcome {
 		h.OnField("", "", prURL)
 	}
 
-	// 6. Report back on the ticket.
+	// 9. Report back on the ticket.
 	if h.Comment != nil {
 		pr.PRURL = prURL
 		if c, err := vcs.RenderJiraComment(pr); err == nil {
@@ -191,6 +285,14 @@ func Run(t Task, h Hooks) Outcome {
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func oneLine(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
 
 func slugify(s string) string {
 	s = strings.ToLower(s)
