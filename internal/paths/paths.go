@@ -2,6 +2,7 @@
 package paths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -26,6 +27,20 @@ func PidFile() string    { return filepath.Join(Root(), "daemon.pid") }
 func WorktreeFor(ticket string) string   { return filepath.Join(Worktrees(), ticket) }
 func GradleHomeFor(_ string) string      { return filepath.Join(Root(), ".gradle-home") }
 func LogFor(ticket string) string        { return filepath.Join(Logs(), ticket+".log") }
+
+// WriteLocalProperties writes sdk.dir to <dir>/local.properties so Gradle can
+// locate the Android SDK in fresh worktrees where the file is git-ignored.
+// No-op when sdkPath is empty.
+func WriteLocalProperties(dir, sdkPath string) error {
+	if sdkPath == "" {
+		return nil
+	}
+	return os.WriteFile(
+		filepath.Join(dir, "local.properties"),
+		[]byte(fmt.Sprintf("sdk.dir=%s\n", sdkPath)),
+		0o644,
+	)
+}
 
 // EnsureDirs creates the directory skeleton if missing.
 func EnsureDirs() error {

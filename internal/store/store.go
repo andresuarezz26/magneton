@@ -29,6 +29,14 @@ const (
 	StateClosed = "closed"
 )
 
+// Emulator lifecycle states.
+const (
+	EmulatorIdle    = "idle"
+	EmulatorBooting = "booting"
+	EmulatorReady   = "ready"
+	EmulatorBusy    = "busy"
+)
+
 // Session is one ticket's row.
 type Session struct {
 	Ticket    string
@@ -60,6 +68,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS emulators (
+  avd_name     TEXT PRIMARY KEY,
+  state        TEXT NOT NULL DEFAULT 'idle',
+  holder       TEXT NOT NULL DEFAULT '',
+  pid          INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  updated_at   INTEGER NOT NULL
 );`
 
 // Open opens (and migrates) the state DB at path.
@@ -154,6 +170,81 @@ func (s *Store) List() ([]Session, error) {
 		out = append(out, *sess)
 	}
 	return out, rows.Err()
+}
+
+// RegisterEmulator upserts an idle emulator row if not already present.
+func (s *Store) RegisterEmulator(avdName string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(
+		`INSERT INTO emulators (avd_name, state, updated_at)
+		 VALUES (?, 'idle', ?)
+		 ON CONFLICT(avd_name) DO NOTHING`,
+		avdName, now,
+	)
+	return err
+}
+
+// SetEmulatorBooting atomically transitions idle→booting and records the pid.
+// Returns true if this caller won the race (only the winner should actually
+// run the emulator process).
+func (s *Store) SetEmulatorBooting(avdName string, pid int) (bool, error) {
+	res, err := s.db.Exec(
+		`UPDATE emulators SET state='booting', pid=?, updated_at=? WHERE avd_name=? AND state='idle'`,
+		pid, time.Now().Unix(), avdName,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// ReleaseEmulator sets state=ready, clears holder, and stamps last_used_at.
+// Used for both booting→ready and busy→ready transitions.
+func (s *Store) ReleaseEmulator(avdName string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(
+		`UPDATE emulators SET state='ready', holder='', last_used_at=?, updated_at=? WHERE avd_name=?`,
+		now, now, avdName,
+	)
+	return err
+}
+
+// AcquireEmulator atomically claims the emulator for a ticket.
+// Returns true only if the row was in state=ready and this caller won.
+func (s *Store) AcquireEmulator(avdName, ticket string) (bool, error) {
+	res, err := s.db.Exec(
+		`UPDATE emulators SET state='busy', holder=?, updated_at=? WHERE avd_name=? AND state='ready'`,
+		ticket, time.Now().Unix(), avdName,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// EmulatorState returns the current state and pid for an AVD.
+func (s *Store) EmulatorState(avdName string) (state string, pid int, err error) {
+	row := s.db.QueryRow(`SELECT state, pid FROM emulators WHERE avd_name=?`, avdName)
+	err = row.Scan(&state, &pid)
+	return
+}
+
+// SetEmulatorIdle resets state to idle and clears the pid (post-kill).
+func (s *Store) SetEmulatorIdle(avdName string) error {
+	_, err := s.db.Exec(
+		`UPDATE emulators SET state='idle', pid=0, holder='', updated_at=? WHERE avd_name=?`,
+		time.Now().Unix(), avdName,
+	)
+	return err
+}
+
+// EmulatorLastUsed returns the last_used_at unix timestamp for an AVD.
+func (s *Store) EmulatorLastUsed(avdName string) (int64, error) {
+	var t int64
+	err := s.db.QueryRow(`SELECT last_used_at FROM emulators WHERE avd_name=?`, avdName).Scan(&t)
+	return t, err
 }
 
 type scanner interface {

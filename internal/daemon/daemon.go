@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andresuarezz26/magneton/internal/build"
 	"github.com/andresuarezz26/magneton/internal/config"
 	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/jira"
@@ -40,7 +41,8 @@ func Run(ctx context.Context, cfg *config.Config, once bool) error {
 	logf("daemon started · concurrency %d · poll %ds", cfg.Concurrency, cfg.PollInterval)
 
 	poll := func() {
-		cleanupResolved(st) // reclaim worktrees for merged/closed PRs (Decision 7)
+		cleanupResolved(st)              // reclaim worktrees for merged/closed PRs (Decision 7)
+		idleShutdownEmulators(st, cfg)   // kill emulators idle past the timeout
 		for i := range cfg.Repos {
 			repo := &cfg.Repos[i]
 			if repo.JQL == "" {
@@ -94,6 +96,7 @@ func Run(ctx context.Context, cfg *config.Config, once bool) error {
 		case <-ctx.Done():
 			logf("shutting down — draining active sessions…")
 			wg.Wait()
+			shutdownEmulators(st, cfg)
 			logf("daemon stopped")
 			return nil
 		case <-ticker.C:
@@ -141,7 +144,7 @@ func process(issue jira.Issue, repo *config.Repo, cfg *config.Config, st *store.
 
 	out := runner.Run(runner.Task{
 		Ticket: ticket, Summary: issue.Summary, Description: issue.Description,
-		Repo: repo, Cfg: cfg,
+		Repo: repo, Cfg: cfg, Store: st,
 	}, runner.Hooks{
 		Logf:    tlog,
 		OnState: func(state string, retries int) { _ = st.SetState(ticket, state, retries) },
@@ -168,6 +171,43 @@ func process(issue jira.Issue, repo *config.Repo, cfg *config.Config, st *store.
 	if out.Err != nil {
 		tlog("[%s] error: %v", ticket, out.Err)
 	}
+}
+
+// idleShutdownEmulators kills any emulator that has been in state=ready with no
+// active holder for longer than cfg.EmulatorIdleTimeout minutes.
+func idleShutdownEmulators(st *store.Store, cfg *config.Config) {
+	if cfg.AVDName == "" {
+		return
+	}
+	state, pid, err := st.EmulatorState(cfg.AVDName)
+	if err != nil || state != store.EmulatorReady {
+		return
+	}
+	lastUsed, err := st.EmulatorLastUsed(cfg.AVDName)
+	if err != nil {
+		return
+	}
+	idleSecs := int64(cfg.EmulatorIdleTimeout) * 60
+	if time.Now().Unix()-lastUsed < idleSecs {
+		return
+	}
+	logf("[emulator] idle timeout — shutting down %s (pid %d)", cfg.AVDName, pid)
+	build.Kill(pid)
+	_ = st.SetEmulatorIdle(cfg.AVDName)
+}
+
+// shutdownEmulators kills all running emulators on daemon shutdown.
+func shutdownEmulators(st *store.Store, cfg *config.Config) {
+	if cfg.AVDName == "" {
+		return
+	}
+	state, pid, err := st.EmulatorState(cfg.AVDName)
+	if err != nil || state == store.EmulatorIdle || pid == 0 {
+		return
+	}
+	logf("[emulator] daemon shutdown — killing %s (pid %d)", cfg.AVDName, pid)
+	build.Kill(pid)
+	_ = st.SetEmulatorIdle(cfg.AVDName)
 }
 
 // logf is the daemon-level log (stdout + daemon.log).

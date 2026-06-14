@@ -104,6 +104,7 @@ func runE(_ *cobra.Command, args []string) error {
 	out := runner.Run(runner.Task{
 		Ticket: ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun,
+		Store: st,
 	}, hooks)
 	return out.Err
 }

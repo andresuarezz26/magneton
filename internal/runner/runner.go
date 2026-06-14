@@ -4,9 +4,11 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/build"
@@ -26,6 +28,7 @@ type Task struct {
 	Repo        *config.Repo
 	Cfg         *config.Config
 	DryRun      bool
+	Store       *store.Store // optional; enables emulator coordination
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
@@ -55,6 +58,12 @@ func Run(t Task, h Hooks) Outcome {
 			h.OnState(s, r)
 		}
 	}
+	needsYouComment := func(msg string) {
+		if h.Comment != nil {
+			h.Comment(fmt.Sprintf("🤖 *magneton needs your help on [%s]*\n\n%s\n\nCheck the session log: `agent logs %s`",
+				t.Ticket, msg, t.Ticket))
+		}
+	}
 
 	repo := t.Repo
 	branch := strings.NewReplacer(
@@ -74,6 +83,11 @@ func Run(t Task, h Hooks) Outcome {
 	}
 	if h.OnField != nil {
 		h.OnField(branch, worktree, "")
+	}
+
+	// Write local.properties so Gradle can find the Android SDK in a fresh worktree.
+	if err := paths.WriteLocalProperties(worktree, t.Cfg.AndroidSDKPath); err != nil {
+		logf("[%s] (warn) local.properties: %v", t.Ticket, err)
 	}
 
 	// 2. PLAN stage — strong model, read-only tools.
@@ -97,6 +111,7 @@ func Run(t Task, h Hooks) Outcome {
 	if err != nil {
 		logf("[%s] needs-you: plan stage did not produce plan.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
+		needsYouComment(fmt.Sprintf("The plan stage failed to produce a plan — the ticket may be too ambiguous or the codebase too complex to analyse automatically.\n\nError: `%v`", err))
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
@@ -115,6 +130,18 @@ func Run(t Task, h Hooks) Outcome {
 	}
 	if testCmd != "" {
 		logf("[%s] test:    %s", t.Ticket, testCmd)
+	}
+
+	// Start emulator in the background, concurrent with the implement stage.
+	// We do this right after reading the plan so boot time overlaps with Claude.
+	needsEmu := plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
+	sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+	var emulatorReady chan error
+	if needsEmu {
+		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		emulatorReady = make(chan error, 1)
+		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, emulatorReady)
+		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, t.Cfg.AVDName, sdkPaths.ADB)
 	}
 
 	// 3. CLARIFY — always post plan to Jira; stop if there are blocking questions.
@@ -158,11 +185,13 @@ func Run(t Task, h Hooks) Outcome {
 	if err != nil {
 		logf("[%s] needs-you: missing/invalid report.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
+		needsYouComment("The implement stage ended without producing a completion report — the session likely crashed or timed out mid-run.")
 		return Outcome{State: store.StateNeedsYou}
 	}
 	if report.Status == "needs_human" {
 		logf("[%s] needs-you: agent reported needs_human — %s", t.Ticket, report.Summary)
 		setState(store.StateNeedsYou, 0)
+		needsYouComment(fmt.Sprintf("The agent determined it cannot safely complete this ticket automatically:\n\n> %s", report.Summary))
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] implement done: %s", t.Ticket, report.Summary)
@@ -197,6 +226,32 @@ func Run(t Task, h Hooks) Outcome {
 	}
 
 	// 6. Build gate with bounded self-correct (Decision 4).
+	// Sync with emulator and acquire it before running the gate.
+	if needsEmu {
+		logf("[%s] waiting for emulator…", t.Ticket)
+		if err := <-emulatorReady; err != nil {
+			logf("[%s] (warn) emulator unavailable: %v — falling back to unit tests", t.Ticket, err)
+			needsEmu = false
+		} else {
+			for {
+				ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket)
+				if ok {
+					break
+				}
+				logf("[%s] emulator busy, waiting…", t.Ticket)
+				time.Sleep(5 * time.Second)
+			}
+			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+			logf("[%s] emulator acquired", t.Ticket)
+		}
+	}
+
+	activeTestCmd := testCmd
+	if needsEmu && repo.ConnectedTest != "" {
+		activeTestCmd = repo.ConnectedTest
+	}
+	logf("[%s] gate will run: compile=%q test=%q emulator=%v", t.Ticket, compileCmd, activeTestCmd, needsEmu)
+
 	attempts := 1
 	gate := func() build.Result {
 		setState(store.StateBuilding, attempts-1)
@@ -204,7 +259,7 @@ func Run(t Task, h Hooks) Outcome {
 			return r
 		}
 		setState(store.StateTesting, attempts-1)
-		return build.Step(worktree, gradleHome, testCmd, "test")
+		return build.Step(worktree, gradleHome, activeTestCmd, "test")
 	}
 	for {
 		res := gate()
@@ -216,6 +271,10 @@ func Run(t Task, h Hooks) Outcome {
 		if attempts >= repo.MaxRetries {
 			logf("[%s] needs-you: %s still red after %d attempts", t.Ticket, res.Phase, attempts)
 			setState(store.StateNeedsYou, attempts-1)
+			needsYouComment(fmt.Sprintf(
+				"The *%s* step failed after %d attempt(s) and the agent could not fix it automatically.\n\n*Last error (tail):*\n{code}\n%s\n{code}\n\nOpen the worktree in Android Studio to investigate:\n`open -a \"Android Studio\" %s`",
+				res.Phase, attempts, tail(res.Output, 1500), worktree,
+			))
 			return Outcome{State: store.StateNeedsYou}
 		}
 		attempts++
@@ -284,7 +343,63 @@ func Run(t Task, h Hooks) Outcome {
 	return Outcome{State: store.StateReview, PRURL: prURL}
 }
 
+// bootOrWait either reuses an already-running emulator, starts a new one, or
+// waits for another runner that is already booting it. It sends exactly one
+// value on done when the emulator reaches state=ready or on error.
+func bootOrWait(avdName string, p build.SDKPaths, st *store.Store, logf func(string, ...interface{}), done chan<- error) {
+	// If any emulator is already attached via adb, skip booting entirely.
+	if build.AlreadyRunning(p) {
+		logf("[emulator] already running — reusing")
+		_ = st.ReleaseEmulator(avdName) // ensure state=ready
+		done <- nil
+		return
+	}
+
+	state, _, err := st.EmulatorState(avdName)
+	if err != nil {
+		done <- fmt.Errorf("emulator state: %w", err)
+		return
+	}
+
+	if state == store.EmulatorIdle {
+		logf("[emulator] booting %s", avdName)
+		pid, err := build.Start(p, avdName)
+		if err != nil {
+			done <- err
+			return
+		}
+		won, err := st.SetEmulatorBooting(avdName, pid)
+		if err != nil {
+			done <- err
+			return
+		}
+		if !won {
+			// Another runner beat us to the start; kill our orphan.
+			build.Kill(pid)
+			logf("[emulator] start race lost — waiting for peer's boot")
+		}
+	}
+
+	// Wait regardless of who launched it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := build.WaitReady(ctx, p); err != nil {
+		done <- err
+		return
+	}
+	_ = st.ReleaseEmulator(avdName) // booting → ready
+	logf("[emulator] ready")
+	done <- nil
+}
+
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return "…" + s[len(s)-n:]
+	}
+	return s
+}
 
 func oneLine(s string, n int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))

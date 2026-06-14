@@ -24,13 +24,14 @@ type Report struct {
 
 // Plan is the .agent/plan.json the plan stage must write before implementation.
 type Plan struct {
-	Plan       string   `json:"plan"`       // one-line approach summary
-	Steps      []string `json:"steps"`      // ordered implementation steps
-	Questions  []string `json:"questions"`  // blocking ambiguities; empty = proceed
-	Confidence string   `json:"confidence"` // "high" | "medium" | "low"
-	Type       string   `json:"type"`       // "bug" | "feature" | "chore"
-	CompileCmd string   `json:"compileCmd"` // discovered Gradle compile command
-	TestCmd    string   `json:"testCmd"`    // discovered Gradle test command
+	Plan          string   `json:"plan"`          // one-line approach summary
+	Steps         []string `json:"steps"`         // ordered implementation steps
+	Questions     []string `json:"questions"`     // blocking ambiguities; empty = proceed
+	Confidence    string   `json:"confidence"`    // "high" | "medium" | "low"
+	Type          string   `json:"type"`          // "bug" | "feature" | "chore"
+	CompileCmd    string   `json:"compileCmd"`    // discovered Gradle compile command
+	TestCmd       string   `json:"testCmd"`       // discovered Gradle test command
+	NeedsEmulator bool     `json:"needs_emulator"` // true if task requires instrumentation tests
 }
 
 // Review is the .agent/review.json the self-review stage must write.
@@ -227,6 +228,13 @@ Instructions:
    For testCmd: find a fully-qualified task like "./gradlew :app:testDebugUnitTest".
      Run "./gradlew tasks --all 2>/dev/null | grep -i test | head -20" to find valid tasks.
    Use empty string if the project has no Gradle setup.
+7. Decide whether this task requires a connected Android device or emulator.
+   Set needs_emulator=true if ANY of these apply:
+   - The ticket involves UI tests, Espresso, or Compose instrumentation tests.
+   - The task creates or modifies files under androidTest/ directory.
+   - The ticket description explicitly mentions instrumentation or connected tests.
+   Set needs_emulator=false for: domain layer, use cases, repositories, ViewModels,
+   unit tests under test/ (not androidTest/), or pure Kotlin/Java logic.
 
 Your ONLY write action is to create .agent/plan.json (create the .agent directory if needed):
 {
@@ -236,7 +244,8 @@ Your ONLY write action is to create .agent/plan.json (create the .agent director
   "confidence": "high" | "medium" | "low",
   "type": "bug" | "feature" | "chore",
   "compileCmd": "<fully-qualified gradlew compile command, or empty string>",
-  "testCmd": "<fully-qualified gradlew test command, or empty string>"
+  "testCmd": "<fully-qualified gradlew test command, or empty string>",
+  "needs_emulator": true | false
 }
 Use an empty array for questions if you can proceed without human input.`,
 		ticketKey, summary, desc)

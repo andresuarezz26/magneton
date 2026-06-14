@@ -58,20 +58,31 @@ const defaultJiraComment = `✅ PR ready for review → {{.PRURL}}
 {{.Tests}} · {{.Attempts}} attempt(s)
 `
 
-const defaultPlanComment = `🤖 magneton plan for [{{.Ticket}}] {{.Summary}}
+const defaultPlanComment = `{{- if .Questions}}
+🤖 *magneton has questions before starting [{{.Ticket}}]*
+
+*Please update the ticket description* with your answers to the questions below, then re-run:
+{code}agent run {{.Ticket}}{code}
+
+*Questions:*
+{{range .Questions}}- {{.}}
+{{end}}
+----
+*Proposed plan (pending your answers):* {{.Plan}}
+*Type:* {{.Type}} · *Confidence:* {{.Confidence}}
+
+*Steps:*
+{{range .Steps}}- {{.}}
+{{end}}
+{{- else}}
+🤖 *magneton plan for [{{.Ticket}}]*
 
 *Approach:* {{.Plan}}
 *Type:* {{.Type}} · *Confidence:* {{.Confidence}}
 
 *Steps:*
 {{range .Steps}}- {{.}}
-{{end}}
-{{- if .Questions}}
-*Questions before I start — please reply to this comment:*
-{{range .Questions}}- {{.}}
-{{end}}
-{{- else}}
-No blockers — proceeding with implementation automatically.
+{{end}}No blockers — proceeding with implementation automatically.
 {{- end}}`
 
 func render(name, def string, data any) (string, error) {

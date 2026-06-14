@@ -1,147 +1,274 @@
 # magneton
 
-Autonomous **Android ticket → PR** agent. A local tool that turns a Jira ticket
-into a review-ready pull request: it provisions an isolated git worktree, drives
-a headless [Claude Code](https://claude.com/claude-code) session to make the
-change, gates the result on a Gradle compile + unit-test run, and opens a PR for
-a human to review and merge. It never auto-merges.
+**Android development workflow automation.** A local CLI that takes a Jira ticket
+and drives the full Android development cycle autonomously: it provisions an
+isolated git worktree, drives a headless [Claude Code](https://claude.com/claude-code)
+session to plan and implement the change, manages Android emulators when the task
+needs instrumented tests, gates the result on a Gradle compile + test run, and opens
+a PR for a human to review and merge. It never auto-merges.
 
-> Built to the binding spec in `.context/attachments/jIQXSc/plan-handoff.md`.
-> Decision numbers below (e.g. *Decision 7*) refer to that document.
+It handles the whole loop — not just "write code" — including keeping you in the
+loop when it gets stuck, moving Jira tickets through their status workflow, and
+coordinating emulator resources across concurrent tasks.
 
 ## Status
 
-- **Phase 1 — complete:** `agent run <TICKET>` — the thin end-to-end "one ticket → one PR" loop, including bounded self-correct retries.
-- **Phase 2 — complete:** background daemon (`agent start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `agent status` (+ `--watch`), Jira JQL polling + transition-on-claim, desktop notifications.
+- **Phase 1 — complete:** `agent run <TICKET>` — the thin end-to-end loop, including bounded self-correct retries.
+- **Phase 2 — complete:** background daemon (`agent start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `agent status` (+ `--watch`), Jira JQL polling, Jira status transitions, desktop notifications.
 - **Phase 3 — complete:** interactive `agent init` wizard with connectivity check, `--version`, GoReleaser + Homebrew packaging.
 
-## How it works (Phase 1 loop)
+## How it works
 
 ```
-fetch ticket → isolated worktree (ai/<ticket>-<slug>)
-            → drive claude -p (stream-json) to edit code
-            → read .agent/report.json completion contract
-            → gate: gradle compile + unit tests
-                 ├─ fail → feed errors back into the SAME session, retry (≤ max_retries)
-                 └─ pass → commit → push → open PR → comment on ticket → stop at `review`
+fetch ticket
+  → move Jira ticket to In Progress
+  → create isolated worktree (ai/<ticket>-<slug>)
+  → write local.properties with Android SDK path
+  → plan stage: Claude reads codebase + ticket, writes plan.json
+       • sets needs_emulator=true for UI/instrumentation tasks
+       • posts plan to Jira (with blockers/questions if any)
+       ↓
+       if questions → post to Jira, wait for user to update ticket, re-run
+  → [if needs_emulator] boot AVD in background goroutine
+  → implement stage: Claude edits code
+       (emulator boots in parallel — saves 60–120s wall time)
+  → gate: gradle compile
+       ├─ needs_emulator=false → ./gradlew testDebugUnitTest
+       └─ needs_emulator=true  → [wait emulator ready] → ./gradlew connectedDebugAndroidTest
+       ├─ fail → feed errors back into the SAME Claude session, retry (≤ max_retries)
+       │         after max_retries: comment on Jira ticket asking for human help
+       └─ pass → commit → push → open PR → comment on Jira ticket → stop at `review`
 ```
 
 **Design principle:** the agent only *edits code and writes a report*; the
-orchestrator owns build, commit, push, and PR. That separation is what makes the
-gate and the self-correct loop trustworthy rather than self-reported.
+orchestrator owns build, commit, push, PR, and Jira status. That separation is
+what makes the gate and the self-correct loop trustworthy rather than self-reported.
 
 ## Project layout
 
-| Path | Responsibility | Decision |
-|---|---|---|
-| `main.go` | entrypoint | — |
-| `cmd/` | Cobra CLI (`agent`): `init`, `run`, `logs`, `status`/`start`/`stop` | 7, 8 |
-| `internal/config` | `~/.agent/config.toml` loader | 15 |
-| `internal/secrets` | OS keychain (`security`) + `$DROIDPILOT_*` env fallback | 14 |
-| `internal/jira` | Jira Cloud read + comment (Phase 2: search + transition) | 5 |
-| `internal/git` | worktree-per-ticket + branch + push | 7 |
-| `internal/agent` | drive `claude -p` stream-json + `report.json` contract | 3, 6 |
-| `internal/build` | Gradle compile/test gate (per-phase steps) | — |
-| `internal/vcs` | `gh` PR + templated PR body / Jira comment | 10 |
-| `internal/runner` | per-ticket pipeline shared by CLI + daemon | 4, 9 |
-| `internal/store` | SQLite state, atomic claim, status queries | 2 |
-| `internal/daemon` | poll loop + concurrency-capped worker pool | 5, 8 |
-| `internal/notify` | desktop notification + daemon-log line | 11 |
-| `internal/paths` | `~/.agent` layout | — |
+| Path | Responsibility |
+|---|---|
+| `main.go` | entrypoint |
+| `cmd/` | Cobra CLI (`agent`): `init`, `run`, `doctor`, `logs`, `status`/`start`/`stop` |
+| `internal/config` | `~/.agent/config.toml` loader |
+| `internal/secrets` | OS keychain (`security`) + `$DROIDPILOT_*` env fallback |
+| `internal/jira` | Jira Cloud read, comment, status transitions |
+| `internal/git` | worktree-per-ticket + branch + push |
+| `internal/agent` | drive `claude -p` stream-json + `plan.json`/`report.json` contract |
+| `internal/build` | Gradle compile/test gate + Android emulator lifecycle |
+| `internal/vcs` | `gh` PR + templated PR body / Jira comment |
+| `internal/runner` | per-ticket pipeline shared by CLI + daemon |
+| `internal/store` | SQLite state: atomic claiming + emulator resource coordination |
+| `internal/daemon` | poll loop + concurrency-capped worker pool + idle emulator shutdown |
+| `internal/notify` | desktop notification + daemon-log line |
+| `internal/paths` | `~/.agent` layout + `local.properties` writer |
 
-## Install / build
+## Install
 
-Requires `git`, the `gh` CLI (for PRs), and an authenticated `claude` CLI.
+### Prerequisites
+
+- **`git`** — available in PATH
+- **`gh`** — GitHub CLI, authenticated (`gh auth login`)
+- **`claude`** — Claude Code CLI, authenticated
+- **Go 1.24+** — to build from source
+- **Android SDK** with at least one AVD — only required for tasks that involve UI or instrumented tests (see [Android Emulator](#android-emulator))
+
+### From source
 
 ```bash
-# Homebrew (release)
-brew install magneton/tap/magneton      # installs the `agent` binary
+git clone https://github.com/andresuarezz26/magneton
+cd magneton
+make install          # builds and installs to ~/.local/bin/agent
+```
 
-# From source (Go 1.24+)
-make build            # → ./agent   (or: go build -o agent .)
-make install          # → $GOBIN/agent
+Or build without installing:
+```bash
+make build            # → ./agent binary in the current directory
+```
+
+### Homebrew (release)
+
+```bash
+brew install magneton/tap/magneton
 ```
 
 Maintainers cut releases with GoReleaser (`make snapshot` for a local dry run);
 `.goreleaser.yaml` builds static binaries for darwin/linux amd64/arm64 and
 publishes the Homebrew formula.
 
-## Configuration
+## Setup
 
 Run **`agent init`**. On a terminal it launches an interactive wizard (prompts
 for Jira URL/email, repo path, build/test commands, and tokens — stored in the
 OS keychain — then runs a connectivity check against Jira, git, `claude`, and
 `gh`). When stdin isn't a TTY (CI), it scaffolds a commented `~/.agent/config.toml`
-to edit by hand. Either way the config looks like:
+to edit by hand.
 
-```toml
-jira_base_url = "https://your-org.atlassian.net"
-jira_email    = "you@your-org.com"
-poll_interval = 30          # seconds (Phase 2 daemon)
-concurrency   = 3           # max concurrent sessions (Phase 2 daemon)
-max_budget_usd = 5          # per-session cost cap passed to claude
-
-[[repo]]
-path        = "~/src/android-app"
-jql         = "labels = ai-agent AND status = 'To Do'"
-branch      = "ai/{ticket}-{slug}"
-compile     = "./gradlew :app:compileDebug"
-test        = "./gradlew testDebugUnitTest"
-max_retries = 3
-# base      = "main"        # base branch; auto-detected if omitted
+To **edit the config** later:
+```bash
+open ~/.agent/config.toml          # macOS — opens in default editor
+# or:
+$EDITOR ~/.agent/config.toml
 ```
 
-**Secrets** (Decision 14) — env vars win, otherwise the macOS keychain:
+To **check that everything is connected** after editing:
+```bash
+agent doctor
+```
+This shows the config path, tests Jira/git/claude/gh connectivity, and verifies
+the Android SDK + AVD setup. No prompts — safe to run at any time.
+
+## Configuration
+
+The config file lives at `~/.agent/config.toml`. A full example:
+
+```toml
+jira_base_url            = "https://your-org.atlassian.net"
+jira_email               = "you@your-org.com"
+jira_in_progress_status  = "In Progress"   # status name in your Jira board (default: "In Progress")
+poll_interval            = 30              # seconds between daemon polls
+concurrency              = 3              # max concurrent sessions (daemon)
+max_budget_usd           = 5             # per-session Claude cost cap
+
+# Android emulator — optional, used automatically for UI/instrumentation tasks
+avd_name              = "Pixel_6_API_34"        # from `emulator -list-avds`
+android_sdk_path      = "~/Library/Android/sdk" # auto-detected from $ANDROID_HOME if omitted
+emulator_idle_timeout = 30                       # minutes of idle before emulator shuts down
+
+[[repo]]
+path           = "~/src/android-app"
+jql            = "labels = ai-agent AND status = 'To Do'"
+branch         = "ai/{ticket}-{slug}"
+compile        = "./gradlew :app:compileDebug"
+test           = "./gradlew testDebugUnitTest"
+connected_test = "./gradlew connectedDebugAndroidTest"  # used when emulator is needed
+max_retries    = 3
+# base          = "main"   # base branch; auto-detected if omitted
+```
+
+### Jira board status names
+
+The `jira_in_progress_status` field must match the **exact status name** in your
+Jira board (case-insensitive). If your board uses a different language, set it
+accordingly:
+
+```toml
+jira_in_progress_status = "En progreso"   # Spanish example
+```
+
+Run `agent doctor` after changing this — if the transition fails, the doctor
+output will list the available status names for your board.
+
+### Secrets
+
+Secrets are stored in the macOS keychain (set during `agent init`) or as
+environment variables:
 
 ```bash
-export DROIDPILOT_JIRA_TOKEN=...   # Jira API token (paired with jira_email)
-gh auth login                      # used by `gh pr create`
-# optional: export DROIDPILOT_ANTHROPIC_TOKEN=...  (else uses your logged-in claude)
+export DROIDPILOT_JIRA_TOKEN=...          # Jira API token (paired with jira_email)
+gh auth login                             # used by `gh pr create`
+# optional:
+export DROIDPILOT_ANTHROPIC_TOKEN=...    # if not using the logged-in claude session
+```
+
+## Android Emulator
+
+The orchestrator decides **automatically** during the plan stage whether a task
+needs an emulator. Claude inspects the ticket and codebase:
+
+- `needs_emulator=true` — task involves UI tests, Espresso, Compose instrumented tests, or creates/modifies files under `androidTest/`
+- `needs_emulator=false` — domain layer, use cases, repositories, ViewModels, or unit tests under `test/`
+
+You don't configure this — it's a per-ticket decision made at plan time.
+
+### Emulator lifecycle
+
+1. **Boot in parallel.** When a task needs the emulator, boot starts immediately after the plan stage — in parallel with the implement stage. By the time Claude finishes writing code, the emulator is usually already warm.
+2. **Shared resource.** The emulator is coordinated via SQLite. If two concurrent tasks both need it, one runs tests while the other waits — no two processes start simultaneously.
+3. **Already running?** If an emulator is already connected (e.g., left open from Android Studio), it is reused without restarting.
+4. **Idle shutdown.** The emulator stays warm between tasks and shuts down automatically after `emulator_idle_timeout` minutes of inactivity, or when `agent stop` is called.
+
+To inspect the emulator's current state:
+```bash
+adb devices        # shows connected emulators
+agent doctor       # shows emulator/AVD status
+```
+
+To open the worktree for a ticket in Android Studio (to inspect what the agent changed):
+```bash
+open -a "Android Studio" ~/.agent/worktrees/<TICKET>
+```
+
+### Prerequisites
+
+```bash
+# Create an AVD via Android Studio's AVD Manager, or via command line:
+avdmanager create avd -n Pixel_6_API_34 \
+  -k "system-images;android-34;google_apis;arm64-v8a"
+
+# Verify:
+emulator -list-avds    # should list Pixel_6_API_34
+adb devices            # shows connected devices/emulators
+```
+
+Then set in `~/.agent/config.toml`:
+```toml
+avd_name         = "Pixel_6_API_34"
+android_sdk_path = "~/Library/Android/sdk"
 ```
 
 ## Usage
 
 ```bash
-agent init                 # scaffold config + templates
-agent run PROJ-123         # one ticket → one PR (records to the state DB)
+agent init                     # scaffold config + run connectivity check
+agent doctor                   # check config path + connectivity (no prompts)
+
+agent run PROJ-123             # run one ticket end-to-end
 agent run PROJ-123 --dry-run   # everything except push + PR (safe first run)
-agent logs PROJ-123        # print the session log
+agent logs PROJ-123            # print the session log
 
-# Test mode — no Jira required (see below):
-agent run LOCAL-1 --local --title "..." --desc "..." --dry-run
-
-# Unattended fleet (Phase 2):
-agent start                # poll Jira + run the fleet (foreground; background with: agent start &)
-agent status               # aligned, grep-able table of every session
-agent status --watch       # live-refreshing view
-agent stop                 # graceful shutdown (drains in-flight sessions)
+# Unattended fleet:
+agent start                    # poll Jira and run sessions (foreground)
+agent start --once             # poll one cycle, run claimed tickets, then exit
+agent status                   # aligned table of every session
+agent status --watch           # live-refreshing view
+agent stop                     # graceful shutdown (drains in-flight sessions)
 ```
 
-The daemon polls each repo's `jql` every `poll_interval` seconds, atomically
-claims new tickets (so none is processed twice), transitions them to *In
-Progress*, runs up to `concurrency` sessions at once, and fires a desktop
-notification when a ticket reaches `review` or `needs-you`. On each cycle it also
-checks open PRs and, once a PR is **merged or closed**, removes that ticket's
-worktree and marks it `merged`/`closed` (Decision 7).
+### The plan + questions workflow
 
-`agent start --once` polls a single cycle, runs whatever it claims, then exits —
-ideal for a first live test without leaving a daemon running.
+Before implementing, magneton posts a plan comment on the Jira ticket. If Claude
+has questions or blockers, the comment explains what's needed:
+
+> 🤖 *magneton has questions before starting [PROJ-123]*
+>
+> *Please update the ticket description* with your answers, then re-run:
+> `agent run PROJ-123`
+
+**What to do:** edit the Jira ticket **description** to answer the questions (don't
+reply in comments — magneton reads the description). Then re-run the command shown.
+
+### When the agent gets stuck
+
+If the build gate fails after all retries, magneton comments on the Jira ticket
+with the error details and the worktree path so you can investigate:
+
+```bash
+open -a "Android Studio" ~/.agent/worktrees/PROJ-123
+```
+
+Fix the issue in the worktree or update the ticket description, then re-run
+`agent run PROJ-123`.
+
+### Safety rails
+
+- Sessions run with a scoped `--allowed-tools` allowlist; all writes happen inside the worktree.
+- `--dry-run` performs edits + build but never pushes or opens a PR.
+- `max_budget_usd` caps per-session Claude cost.
+- The agent never auto-merges — it always stops at `review`.
 
 Runtime data lives under `~/.agent/`: `config.toml`, `worktrees/<ticket>/`,
-`logs/<ticket>.log`, `templates/`, and (Phase 2) `state.db`.
-
-### Safety rails (Decision 16)
-
-- Sessions run with a scoped `--allowed-tools` allowlist; writes happen in the
-  worktree (the session's cwd).
-- `--dry-run` performs edits + build but never pushes or opens a PR.
-- `max_budget_usd` caps per-session cost.
-- The default `allowed_tools` is **scoped**: file edits plus the Gradle wrapper
-  and read-only commands (`ls`/`cat`/`grep`/`git status` …) — no arbitrary
-  `Bash`, so a misfire can't run destructive or network commands. Widen it in
-  config if a repo needs more.
-- *Residual:* read commands can still reference paths outside the worktree; full
-  filesystem confinement needs an OS sandbox (a later hardening step).
+`logs/<ticket>.log`, `templates/`, and `state.db`.
 
 ## How to test
 
@@ -154,9 +281,6 @@ go test ./...
 ```
 
 ### 2. Full loop, no Jira / no cloud (`--local`)
-
-Runs the complete pipeline (worktree → real Claude session → gate → self-correct
-→ commit) against a throwaway repo. Copy/paste:
 
 ```bash
 go build -o agent .
@@ -190,41 +314,33 @@ Expected: `… → gate green ✓ → committed on ai/hello-1-…`. Inspect with
 `max_retries = 2` in the config above and re-run. You'll see it retry into the
 same Claude session and route to `needs-you` after exhausting retries.
 
-> `DROIDPILOT_HOME` overrides the `~/.agent` location — use it to keep tests
-> isolated from your real config.
-
 ### 3. Real Jira + real repo (live run)
 
-This is the end-to-end live test. ~10 minutes of setup.
-
 **Prerequisites**
-- A Jira Cloud site + project. Create an API token at
-  <https://id.atlassian.com/manage-profile/security/api-tokens>.
-- A clone of your Android repo with a pushable `origin` (GitHub) and
-  `gh auth login` done. `gh repo view` should work from inside it.
+- A Jira Cloud site + project. Create an API token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
+- A clone of your Android repo with a pushable `origin` (GitHub) and `gh auth login` done.
 - An authenticated `claude` (`claude --version` works).
 
-**1 — Configure.** Run the wizard (or edit `~/.agent/config.toml`):
+**1 — Configure:**
 ```bash
 agent init
 # Jira base URL  → https://YOURORG.atlassian.net
 # Jira email     → you@yourorg.com
 # Repository     → /abs/path/to/android-repo
-# Compile        → ./gradlew :app:compileDebug   (your real module)
+# Compile        → ./gradlew :app:compileDebug
 # Test           → ./gradlew testDebugUnitTest
 # JQL            → labels = ai-agent AND status = "To Do"
 # Jira API token → (stored in keychain)
 ```
-The wizard ends with a connectivity check — make sure Jira/git/claude/gh are all ✓.
 
 **2 — Seed one safe ticket.** In Jira, create a small, well-scoped chore (e.g.
 "bump library X to version Y" or "fix this lint warning"), give it the
-`ai-agent` label, and leave it in **To Do** so your JQL matches it.
+`ai-agent` label, leave it in **To Do**.
 
 **3 — Single-ticket dry run first (no PR, no Jira writes):**
 ```bash
 agent run PROJ-123 --dry-run
-git -C ~/.agent/worktrees/PROJ-123 diff      # inspect what it changed
+git -C ~/.agent/worktrees/PROJ-123 diff
 agent logs PROJ-123
 ```
 
@@ -232,29 +348,25 @@ agent logs PROJ-123
 ```bash
 agent run PROJ-123
 ```
-Expect: branch pushed, PR opened, a comment with the PR link on the ticket, and
-the session left at `review` (never auto-merged).
 
-**5 — Exercise the daemon for one cycle (polls your JQL, claims, transitions):**
+**5 — Exercise the daemon for one cycle:**
 ```bash
 agent start --once     # claims matching tickets, runs them, then exits
-agent status           # see the fleet
+agent status
 ```
-When you later **merge or close** that PR, the next `agent start` (or
-`agent start --once`) reclaims its worktree and marks it `merged`/`closed`.
 
 **6 — Leave it running unattended:**
 ```bash
-agent start &          # or: nohup agent start >/dev/null 2>&1 &
+agent start &
 agent status --watch
 agent stop
 ```
 
 > Tip: keep `concurrency` low (1–2) and `max_budget_usd` modest for the first
-> real runs, and start with `wedge`-type tickets (scoped bugs & chores).
+> real runs, and start with small, well-scoped tickets.
 
 ## Roadmap
 
 1. **Local laptop** (now) — unsupervised single + concurrent runs on your machine.
 2. **Shared team runners** — always-on, warm caches, central visibility.
-3. **Hosted platform** — managed execution + emulator/device gating, RBAC, audit.
+3. **Hosted platform** — managed execution + emulator/device fleet, RBAC, audit.
