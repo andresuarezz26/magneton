@@ -106,10 +106,14 @@ to edit by hand.
 
 To **edit the config** later:
 ```bash
-open ~/.agent/config.toml          # macOS — opens in default editor
-# or:
-$EDITOR ~/.agent/config.toml
+open -t ~/.agent/config.toml        # macOS — opens in the default text editor
+# or, if you have $EDITOR set:
+"${EDITOR:-vi}" ~/.agent/config.toml
 ```
+
+> Note: plain `open ~/.agent/config.toml` fails on a stock macOS with
+> `kLSApplicationNotFoundErr` — no app is registered for the `.toml` extension.
+> Use `open -t` (default *text* editor) or pass an explicit editor.
 
 To **check that everything is connected** after editing:
 ```bash
