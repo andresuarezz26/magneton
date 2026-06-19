@@ -44,6 +44,39 @@ fetch ticket
 orchestrator owns build, commit, push, PR, and Jira status. That separation is
 what makes the gate and the self-correct loop trustworthy rather than self-reported.
 
+## Deterministic by design
+
+Everything except *writing code* is plain, deterministic orchestration — Go shelling
+out to `git`/`gh` or calling the Jira REST API directly. The AI is never asked to
+create a branch, push, open a PR, or move a Jira ticket. That buys three things:
+
+- **Trustworthy results.** The model physically *cannot* push or open a PR, so it
+  can't self-report success. Only the orchestrator pushes, and only after the real
+  Gradle gate passes — so "green" means the code actually compiled and tested, not
+  that the agent said it did.
+- **No hallucination risk on plumbing.** Branch names, PR creation, and Jira
+  transitions are exact API/CLI calls. They can't be malformed, invented, or
+  "almost right" the way generated shell commands can.
+- **Fewer tokens, faster runs.** No round-trips spent asking the model to run `git`
+  or `gh`. The model spends its budget on the one thing only it can do — the code.
+
+How the boundary is enforced (two layers, no MCP anywhere):
+
+| Operation | Owner | Mechanism |
+|---|---|---|
+| Worktree + branch | orchestrator | `git worktree add -b …` (`internal/git`) |
+| Commit / push | orchestrator | `git add -A && git commit`, `git push` (`internal/git`) |
+| Open PR | orchestrator | `gh pr create …` (`internal/vcs`) |
+| Jira fetch / comment / transition | orchestrator | Jira REST API over HTTP (`internal/jira`) |
+| Edit source, run tests | agent | `claude -p` with a scoped `--allowed-tools` allowlist |
+
+The agent runs under a per-stage `--allowed-tools` allowlist: read-only at plan and
+review, and at implement only `Edit`/`Write`/`Read`/search, `Bash(./gradlew:*)`, and
+**read-only** git (`status`/`diff`/`log`/`show`). No `git push`, no `git commit`, no
+`gh`, no network — so a tool call outside that set is rejected, not just discouraged.
+The implement allowlist is configurable via `allowed_tools`; widening it to include
+`gh` or `git push` would hand those steps back to the model and is not recommended.
+
 ## Project layout
 
 | Path | Responsibility |
