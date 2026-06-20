@@ -293,9 +293,10 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case claudeClosedMsg:
 		if msg.err != nil {
-			m.notice = "claude code: " + msg.err.Error()
+			m.notice = "open Claude Code: " + msg.err.Error()
+		} else {
+			m.notice = "opened Claude Code in a new terminal"
 		}
-		m.reload()
 		return m, nil
 	case tea.KeyMsg:
 		return m.dispatchKey(msg)

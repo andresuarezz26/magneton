@@ -2,12 +2,18 @@ package cmd
 
 import (
 	"os/exec"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
+
+// shellQuote single-quotes a string for safe embedding in a shell command line.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // agentActions returns the contextual menu items for one agent (shown when the
 // user presses Enter on it). Global commands are appended by paletteItems.
@@ -20,8 +26,8 @@ func agentActions(s store.Session) []paletteItem {
 		items = append(items, paletteItem{"resume", "Resume (verify & ship)", "re-run the gate on your fix, then PR"})
 	}
 	items = append(items,
-		paletteItem{"studio", "Open Android Studio", "edit the worktree by hand"},
-		paletteItem{"claude", "Open Claude Code", "resume the agent's session in the worktree"},
+		paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
+		paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"},
 	)
 	if s.State != "review" && s.State != "merged" && s.State != "closed" {
 		items = append(items, paletteItem{"stop", "Stop & clean up", "kill the process and remove the worktree"})
@@ -29,20 +35,21 @@ func agentActions(s store.Session) []paletteItem {
 	return items
 }
 
-// claudeClosedMsg is returned after an interactive Claude Code session exits.
+// claudeClosedMsg is returned after launching a Claude Code terminal.
 type claudeClosedMsg struct{ err error }
 
-// openClaude hands the terminal to an interactive Claude Code session in the
-// ticket's worktree, resuming the agent's stored session when there is one.
-// tea.ExecProcess suspends the TUI and restores it when claude exits.
+// openClaude opens a NEW terminal window running an interactive Claude Code
+// session in the ticket's worktree, resuming the agent's stored session when
+// there is one. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
-	args := []string{}
+	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Ticket)) + " && claude"
 	if s.SessionID != "" {
-		args = []string{"--resume", s.SessionID}
+		cmdline += " --resume " + shellQuote(s.SessionID)
 	}
-	c := exec.Command("claude", args...)
-	c.Dir = paths.WorktreeFor(s.Ticket)
-	return tea.ExecProcess(c, func(err error) tea.Msg { return claudeClosedMsg{err: err} })
+	script := "tell application \"Terminal\"\n\tdo script \"" + cmdline + "\"\n\tactivate\nend tell"
+	return func() tea.Msg {
+		return claudeClosedMsg{err: exec.Command("osascript", "-e", script).Start()}
+	}
 }
 
 // doAction runs an action by id. The Enter menu and the keyboard shortcuts both
@@ -59,8 +66,15 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "studio":
 		if s := m.selected(); s != nil {
-			_ = exec.Command("open", "-a", "Android Studio", paths.WorktreeFor(s.Ticket)).Start()
-			m.notice = "opening Android Studio…"
+			wt := paths.WorktreeFor(s.Ticket)
+			// Prefer the JetBrains `studio` launcher (opens the dir as a project);
+			// fall back to the macOS app.
+			if _, err := exec.LookPath("studio"); err == nil {
+				_ = exec.Command("studio", wt).Start()
+			} else {
+				_ = exec.Command("open", "-a", "Android Studio", wt).Start()
+			}
+			m.notice = "opening Android Studio in the worktree…"
 		}
 	case "claude":
 		if s := m.selected(); s != nil {
