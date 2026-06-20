@@ -243,7 +243,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s := m.selected(); s != nil {
 				_ = exec.Command("open", paths.WorktreeFor(s.Ticket)).Start()
 			}
-		case "a":
+		case "enter", "a":
 			if s := m.selected(); s != nil && s.State == "awaiting-answer" {
 				m.answering = true
 				m.input = ""
@@ -403,7 +403,7 @@ func (m monitorModel) View() string {
 	if m.notice != "" {
 		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
 	}
-	hint := "↑↓ select · a answer · o open worktree · r refresh · q quit · live every 1s"
+	hint := "↑↓ select · ↵ answer · o open worktree · r refresh · q quit · live every 1s"
 	if m.answering {
 		hint = "typing… [enter] send & resume · [esc] cancel"
 	}
@@ -422,13 +422,13 @@ func whyLines(s store.Session) []string {
 	switch s.State {
 	case "awaiting-answer":
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Ticket)); err == nil && len(plan.Questions) > 0 {
-			out := []string{fmt.Sprintf("▮ Needs you — answer %d question(s), then re-run:", len(plan.Questions))}
+			out := []string{fmt.Sprintf("▮ Needs you — press ↵ enter to answer %d question(s):", len(plan.Questions))}
 			for i, q := range plan.Questions {
 				out = append(out, fmt.Sprintf("  Q%d %s", i+1, q))
 			}
 			return out
 		}
-		return []string{"▮ Needs you — awaiting your input (see log below)."}
+		return []string{"▮ Needs you — press ↵ enter to respond (see log below)."}
 	case "failed":
 		return []string{"✗ Failed — " + failReason(s.Ticket)}
 	case "needs-you":
