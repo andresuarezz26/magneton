@@ -14,6 +14,7 @@ import (
 
 	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/jira"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
@@ -117,7 +118,9 @@ func newGroups() []*group {
 		{label: "NEEDS YOU", style: red, match: func(s store.Session) bool {
 			return s.State == "awaiting-answer" || s.State == "needs-you" || s.State == "failed"
 		}},
-		{label: "STOPPED", style: orange, match: isStopped},
+		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
+			return s.State == store.StateStopped || isStopped(s)
+		}},
 		{label: "RUNNING", style: cyan, match: func(s store.Session) bool {
 			return isRunningState(s.State) && !isStopped(s)
 		}},
@@ -128,7 +131,7 @@ func newGroups() []*group {
 }
 
 func glyphFor(s store.Session) string {
-	if isStopped(s) {
+	if s.State == store.StateStopped || isStopped(s) {
 		return "■"
 	}
 	switch s.State {
@@ -173,6 +176,9 @@ type monitorModel struct {
 	input     string
 	answerKey string
 	notice    string // transient status/error line under the footer
+
+	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
+	confirming string
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -181,6 +187,9 @@ type answerDoneMsg struct {
 	ticket string
 	err    error
 }
+
+// cancelDoneMsg is returned once an agent has been stopped + cleaned up.
+type cancelDoneMsg struct{ ticket string }
 
 type tickMsg time.Time
 
@@ -240,9 +249,16 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "answer sent to " + msg.ticket + " — resuming…"
 		}
 		return m, nil
+	case cancelDoneMsg:
+		m.notice = "stopped " + msg.ticket + " — process killed, worktree removed"
+		m.reload()
+		return m, nil
 	case tea.KeyMsg:
 		if m.answering {
 			return m.updateAnswering(msg)
+		}
+		if m.confirming != "" {
+			return m.updateConfirming(msg)
 		}
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
@@ -268,9 +284,58 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.answerKey = s.Ticket
 				m.notice = ""
 			}
+		case "x":
+			if s := m.selected(); s != nil {
+				m.confirming = s.Ticket
+				m.notice = ""
+			}
 		}
 	}
 	return m, nil
+}
+
+// updateConfirming handles the y/n stop-confirmation prompt.
+func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		key := m.confirming
+		m.confirming = ""
+		var target *store.Session
+		for i := range m.flat {
+			if m.flat[i].Ticket == key {
+				target = &m.flat[i]
+				break
+			}
+		}
+		if target == nil {
+			return m, nil
+		}
+		m.notice = "stopping " + key + "…"
+		return m, m.cancelAgent(*target)
+	case "n", "N", "esc", "q":
+		m.confirming = ""
+	}
+	return m, nil
+}
+
+// cancelAgent kills the driving process (if alive), removes the worktree, and
+// marks the session stopped so it leaves NEEDS YOU for STOPPED.
+func (m monitorModel) cancelAgent(s store.Session) tea.Cmd {
+	st := m.store
+	return func() tea.Msg {
+		if s.PID > 0 && pidAlive(s.PID) {
+			_ = syscall.Kill(s.PID, syscall.SIGTERM)
+		}
+		wt := s.Worktree
+		if wt == "" {
+			wt = paths.WorktreeFor(s.Ticket)
+		}
+		if s.Repo != "" {
+			_ = git.RemoveWorktree(s.Repo, wt)
+		}
+		_ = st.SetState(s.Ticket, store.StateStopped, s.Retries)
+		return cancelDoneMsg{ticket: s.Ticket}
+	}
 }
 
 // updateAnswering handles keystrokes while the answer input box is open.
@@ -427,12 +492,16 @@ func (m monitorModel) View() string {
 	}
 
 	b.WriteString(sepStyle.Render(strings.Repeat("─", w)) + "\n")
-	if m.notice != "" {
+	if m.confirming != "" {
+		b.WriteString(whyStyle.Render(truncate("  Stop "+m.confirming+"? Kills its process + removes its worktree.  [y] yes   [n] no", w)) + "\n")
+	} else if m.notice != "" {
 		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
 	}
-	hint := "↑↓ select · ↵ answer · o open worktree · r refresh · q quit · live every 1s"
+	hint := "↑↓ select · ↵ answer · x stop · o open · r refresh · q quit · live every 1s"
 	if m.answering {
 		hint = "typing… [enter] send & resume · [esc] cancel"
+	} else if m.confirming != "" {
+		hint = "confirm stop: [y] yes · [n] no"
 	}
 	b.WriteString(dimStyle.Render(hint))
 	return b.String()

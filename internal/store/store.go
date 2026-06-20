@@ -27,6 +27,9 @@ const (
 	// Terminal post-review states set when the PR is resolved (Decision 7 cleanup).
 	StateMerged = "merged"
 	StateClosed = "closed"
+	// StateStopped is set when a session is manually cancelled from the monitor
+	// (process killed + worktree removed).
+	StateStopped = "stopped"
 )
 
 // Emulator lifecycle states.

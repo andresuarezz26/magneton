@@ -166,3 +166,42 @@ func TestReloadGrouping(t *testing.T) {
 		t.Errorf("cursor not clamped: %d, want 4", m.cursor)
 	}
 }
+
+func TestCancelAgentMarksStopped(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Claim("KAN-9", "", "x"); err != nil { // empty repo → worktree removal skipped
+		t.Fatal(err)
+	}
+	_ = st.SetState("KAN-9", "failed", 0)
+
+	m := monitorModel{store: st}
+	// No pid, no repo: cancelAgent only marks the session stopped.
+	msg := m.cancelAgent(store.Session{Ticket: "KAN-9", State: "failed"})()
+	if done, ok := msg.(cancelDoneMsg); !ok || done.ticket != "KAN-9" {
+		t.Fatalf("unexpected msg: %#v", msg)
+	}
+	got, err := st.Get("KAN-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != store.StateStopped {
+		t.Errorf("state = %q, want %q", got.State, store.StateStopped)
+	}
+
+	// And it now buckets under STOPPED, not NEEDS YOU.
+	m.reload()
+	for _, g := range m.groups {
+		if g.label == "NEEDS YOU" {
+			for _, s := range g.sessions {
+				if s.Ticket == "KAN-9" {
+					t.Error("KAN-9 should have left NEEDS YOU after stop")
+				}
+			}
+		}
+	}
+}
