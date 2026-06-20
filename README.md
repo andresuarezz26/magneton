@@ -260,9 +260,13 @@ android_sdk_path = "~/Library/Android/sdk"
 agent init                     # scaffold config + run connectivity check
 agent doctor                   # check config path + connectivity (no prompts)
 
-agent run PROJ-123             # run one ticket end-to-end
+agent run PROJ-123             # run one Jira ticket end-to-end
 agent run PROJ-123 --dry-run   # everything except push + PR (safe first run)
 agent logs PROJ-123            # print the session log
+
+# No Jira required — point it at local markdown files:
+agent run ticket.md                        # one local ticket, no Jira
+agent run feat-a.md feat-b.md feat-c.md    # several at once, in parallel
 
 # Unattended fleet:
 agent start                    # poll Jira and run sessions (foreground)
@@ -271,6 +275,31 @@ agent status                   # aligned table of every session
 agent status --watch           # live-refreshing view
 agent stop                     # graceful shutdown (drains in-flight sessions)
 ```
+
+### Local files instead of Jira
+
+You don't need Jira to use magneton. Pass one or more file paths to `agent run`
+and each is treated as a ticket:
+
+```bash
+agent run ./tickets/add-logout-button.md ./tickets/fix-crash.md
+```
+
+- **Title + body.** The first markdown `# H1` is the ticket summary (or the first
+  non-blank line if there's no H1); everything after it is the description handed
+  to the agent.
+- **Ticket id.** Derived from the filename: `add-logout-button.md` → `ADD-LOGOUT-BUTTON`,
+  used for the worktree, branch, log file, and `agent status`. Same-basename files
+  in one run are disambiguated with a `-2`/`-3` suffix.
+- **Parallelism.** Multiple args run concurrently, capped at `concurrency` from your
+  config (default 3). Each ticket gets its own worktree, branch, and `<id>.log`;
+  terminal lines are prefixed `[<id>]`. If one fails, the others still run and the
+  command exits non-zero.
+- **Plan + questions.** With no Jira to comment on, the agent's plan and any blocking
+  questions print to the terminal and the per-ticket log instead. Answer by editing
+  the `.md` and re-running (same stop-and-re-run flow as Jira).
+
+You can also mix Jira keys and files in one invocation: `agent run PROJ-1 todo.md`.
 
 ### The plan + questions workflow
 

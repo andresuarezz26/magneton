@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -25,9 +26,9 @@ var (
 
 func init() {
 	c := &cobra.Command{
-		Use:   "run <TICKET>",
-		Short: "Take one Jira ticket end-to-end to an open PR",
-		Args:  cobra.ExactArgs(1),
+		Use:   "run <TICKET|FILE>...",
+		Short: "Take one or more tickets (Jira keys or local .md files) end-to-end to open PRs",
+		Args:  cobra.MinimumNArgs(1),
 		RunE:  runE,
 	}
 	c.Flags().StringVar(&runRepo, "repo", "", "repo path (defaults to the first configured repo)")
@@ -39,7 +40,6 @@ func init() {
 }
 
 func runE(_ *cobra.Command, args []string) error {
-	ticket := normalizeTicket(args[0])
 	if err := paths.EnsureDirs(); err != nil {
 		return err
 	}
@@ -52,61 +52,180 @@ func runE(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	logf, closeLog := newLogger(ticket)
-	defer closeLog()
-
-	// Resolve the ticket — from Jira, or from flags in --local test mode.
-	var jc *jira.Client
-	summary, desc := runTitle, runDesc
-	if runLocal {
-		if runTitle == "" {
-			return fmt.Errorf("--local requires --title")
-		}
-		logf("[%s] queued → working (local)", ticket)
-	} else {
-		jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-		logf("[%s] queued → working", ticket)
-		issue, err := jc.FetchIssue(ticket)
-		if err != nil {
-			return fmt.Errorf("fetch ticket: %w", err)
-		}
-		summary, desc = issue.Summary, issue.Description
-		if !strings.EqualFold(issue.Status, cfg.JiraInProgressStatus) {
-			logf("[%s] status is %q — transitioning to %q", ticket, issue.Status, cfg.JiraInProgressStatus)
-			if err := jc.TransitionTo(ticket, cfg.JiraInProgressStatus); err != nil {
-				logf("[%s] (warn) could not transition to %q: %v", ticket, cfg.JiraInProgressStatus, err)
-			}
-		}
+	specs, err := resolveSpecs(args)
+	if err != nil {
+		return err
 	}
-	logf("[%s] %s", ticket, summary)
 
-	// State store so `agent status` reflects manual runs too.
+	// One shared store across goroutines (its *sql.DB is concurrency-safe;
+	// the daemon shares one the same way).
 	st, err := store.Open(paths.StateDB())
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	_, _ = st.Claim(ticket, repo.Path, summary)
 
-	hooks := runner.Hooks{
-		Logf:    logf,
-		OnState: func(state string, retries int) { _ = st.SetState(ticket, state, retries) },
-		OnField: func(branch, worktree, pr string) { _ = st.SetFields(ticket, branch, worktree, pr) },
+	// Fan out, capped at cfg.Concurrency, mirroring the daemon's worker pool.
+	// No ctx: the CLI is foreground and runs every ticket to completion.
+	conc := cfg.Concurrency
+	if conc < 1 {
+		conc = 1
 	}
-	if jc != nil {
-		hooks.Comment = func(text string) {
-			if err := jc.AddComment(ticket, text); err != nil {
-				logf("[%s] (warn) jira comment failed: %v", ticket, err)
+	var (
+		wg     sync.WaitGroup
+		sem    = make(chan struct{}, conc)
+		mu     sync.Mutex
+		failed int
+	)
+	for _, sp := range specs {
+		wg.Add(1)
+		go func(sp ticketSpec) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out := runOne(sp, cfg, repo, st)
+			if out.Err != nil || out.State == store.StateFailed {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+			}
+		}(sp)
+	}
+	wg.Wait()
+
+	if failed > 0 {
+		return fmt.Errorf("%d of %d ticket(s) failed", failed, len(specs))
+	}
+	return nil
+}
+
+// resolveSpecs turns CLI args into resolved, de-duplicated ticketSpecs, failing
+// fast on validation before any work fans out. Per arg, in order:
+//  1. legacy --local/--title (single arg only): take text from flags;
+//  2. an existing file on disk: parse it as a local .md/text ticket;
+//  3. otherwise: a Jira ticket key.
+func resolveSpecs(args []string) ([]ticketSpec, error) {
+	multi := len(args) > 1
+	if multi && (runTitle != "" || runDesc != "") {
+		return nil, fmt.Errorf("--title/--desc cannot be combined with multiple tickets; put the text in the .md files")
+	}
+
+	specs := make([]ticketSpec, 0, len(args))
+	for _, arg := range args {
+		// (1) Legacy flag-driven local mode, single arg only.
+		if !multi && (runLocal || runTitle != "") {
+			if runTitle == "" {
+				return nil, fmt.Errorf("--local requires --title")
+			}
+			specs = append(specs, ticketSpec{
+				ticket: normalizeTicket(arg), summary: runTitle, desc: runDesc, local: true,
+			})
+			continue
+		}
+		// (2) An existing file → local source.
+		if fi, err := os.Stat(arg); err == nil && !fi.IsDir() {
+			sp, err := loadLocalTicket(arg)
+			if err != nil {
+				return nil, err
+			}
+			specs = append(specs, sp)
+			continue
+		}
+		// (3) Jira ticket key.
+		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg)})
+	}
+
+	return dedupeSpecs(specs), nil
+}
+
+// dedupeSpecs guarantees unique ticket ids within one invocation so two files
+// with the same basename (both derive e.g. "DUP") don't collide on
+// worktree/branch/log path or the store's primary key. Later collisions get a
+// -2/-3 suffix.
+func dedupeSpecs(specs []ticketSpec) []ticketSpec {
+	seen := map[string]int{}
+	for i := range specs {
+		id := specs[i].ticket
+		if n := seen[id]; n > 0 {
+			newID := fmt.Sprintf("%s-%d", id, n+1)
+			for seen[newID] > 0 {
+				n++
+				newID = fmt.Sprintf("%s-%d", id, n+1)
+			}
+			fmt.Printf("(warn) ticket id %q collides; using %q\n", id, newID)
+			seen[id] = n + 1
+			specs[i].ticket = newID
+			seen[newID] = 1
+		} else {
+			seen[id] = 1
+		}
+	}
+	return specs
+}
+
+// runOne executes the full pipeline for a single resolved ticket. It never
+// bubbles an error up the Go path: it returns an Outcome so sibling tickets in
+// a parallel run keep going.
+func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Store) runner.Outcome {
+	logf, closeLog := newLogger(sp.ticket)
+	defer closeLog()
+
+	summary, desc := sp.summary, sp.desc
+	var jc *jira.Client
+	if sp.local {
+		logf("[%s] queued → working (local)", sp.ticket)
+	} else {
+		jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
+		logf("[%s] queued → working", sp.ticket)
+		issue, err := jc.FetchIssue(sp.ticket)
+		if err != nil {
+			logf("[%s] (error) fetch ticket: %v", sp.ticket, err)
+			return runner.Outcome{State: store.StateFailed, Err: fmt.Errorf("fetch %s: %w", sp.ticket, err)}
+		}
+		summary, desc = issue.Summary, issue.Description
+		if !strings.EqualFold(issue.Status, cfg.JiraInProgressStatus) {
+			logf("[%s] status is %q — transitioning to %q", sp.ticket, issue.Status, cfg.JiraInProgressStatus)
+			if err := jc.TransitionTo(sp.ticket, cfg.JiraInProgressStatus); err != nil {
+				logf("[%s] (warn) could not transition to %q: %v", sp.ticket, cfg.JiraInProgressStatus, err)
 			}
 		}
 	}
+	logf("[%s] %s", sp.ticket, summary)
 
-	out := runner.Run(runner.Task{
-		Ticket: ticket, Summary: summary, Description: desc,
+	// State store so `agent status` reflects manual runs too.
+	_, _ = st.Claim(sp.ticket, repo.Path, summary)
+
+	hooks := runner.Hooks{
+		Logf:    logf,
+		OnState: func(state string, retries int) { _ = st.SetState(sp.ticket, state, retries) },
+		OnField: func(branch, worktree, pr string) { _ = st.SetFields(sp.ticket, branch, worktree, pr) },
+	}
+	if jc != nil {
+		hooks.Comment = func(text string) {
+			if err := jc.AddComment(sp.ticket, text); err != nil {
+				logf("[%s] (warn) jira comment failed: %v", sp.ticket, err)
+			}
+		}
+	} else {
+		// No Jira: route the plan + any blocking questions to the CLI so they
+		// don't vanish (the runner only emits them via Comment).
+		hooks.Comment = localPlanComment(logf, sp.ticket)
+	}
+
+	return runner.Run(runner.Task{
+		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun,
 		Store: st,
 	}, hooks)
-	return out.Err
+}
+
+// localPlanComment routes runner Comment text (the rendered plan and blocking
+// questions) to the CLI logger so it's visible without Jira. Emitted as a
+// single logf call so the block doesn't interleave with other tickets' lines.
+func localPlanComment(logf func(string, ...interface{}), ticket string) func(string) {
+	return func(text string) {
+		logf("[%s] ----- agent comment -----\n%s\n[%s] -------------------------", ticket, text, ticket)
+	}
 }
 
 // newLogger returns a logf that writes to stdout and ~/.agent/logs/<ticket>.log.
