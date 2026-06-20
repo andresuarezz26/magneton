@@ -470,6 +470,7 @@ var (
 	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
 )
 
 func (m monitorModel) View() string {
@@ -534,10 +535,14 @@ func (m monitorModel) View() string {
 
 // renderDashboardBody renders the triaged agent list + detail pane (no footer).
 func (m monitorModel) renderDashboardBody(w int) string {
-	if len(m.flat) == 0 {
-		return "\n  " + dimStyle.Render("no agents yet — click Run new below, or Menu for the rest")
-	}
 	var b strings.Builder
+	// Primary CTA, above everything: start new work.
+	b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press n") + "\n\n")
+
+	if len(m.flat) == 0 {
+		b.WriteString("  " + dimStyle.Render("no agents running yet — press n to start one, or : for commands"))
+		return b.String()
+	}
 	idx := 0
 	listLines := 0
 	for _, g := range m.groups {
@@ -579,7 +584,7 @@ func (m monitorModel) renderDashboardBody(w int) string {
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
 			b.WriteString("  › " + m.input + "▌")
 		} else {
-			detailH := m.height - listLines - 8 - len(whyLines(*sel))
+			detailH := m.height - listLines - 10 - len(whyLines(*sel))
 			if detailH < 3 {
 				detailH = 3
 			}
