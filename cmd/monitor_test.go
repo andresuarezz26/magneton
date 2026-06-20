@@ -156,14 +156,21 @@ func TestReloadGrouping(t *testing.T) {
 	if m.flat[0].State != "awaiting-answer" && m.flat[0].State != "failed" {
 		t.Errorf("flat[0] state = %q, want a needs-you state first", m.flat[0].State)
 	}
-	// selected() bounds + cursor clamp.
-	if m.selected() == nil {
-		t.Error("selected() should not be nil with 5 rows")
+	// Cursor 0 is the Start-new row → no agent selected.
+	m.cursor = 0
+	if m.selected() != nil {
+		t.Error("cursor 0 (Start-new row) should select no agent")
 	}
+	// Cursor 1 selects the first agent.
+	m.cursor = 1
+	if m.selected() == nil || m.selected().Ticket != m.flat[0].Ticket {
+		t.Error("cursor 1 should select the first agent")
+	}
+	// Clamp: max cursor is len(flat) (Start-new row + N agents).
 	m.cursor = 99
 	m.reload()
-	if m.cursor != 4 {
-		t.Errorf("cursor not clamped: %d, want 4", m.cursor)
+	if m.cursor != 5 {
+		t.Errorf("cursor not clamped: %d, want 5", m.cursor)
 	}
 }
 

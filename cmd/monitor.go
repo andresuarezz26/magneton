@@ -30,32 +30,34 @@ func init() {
 	c := &cobra.Command{
 		Use:     "monitor",
 		Aliases: []string{"top"},
-		Short:   "Live TUI dashboard: watch agents, answer their questions, and resume them",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			st, err := store.Open(paths.StateDB())
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-
-			// Best-effort Jira client for answer-and-resume; nil if not configured.
-			var jc *jira.Client
-			if cfg, cerr := config.Load(); cerr == nil && cfg.JiraBaseURL != "" {
-				jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-			}
-			self, _ := os.Executable()
-			if self == "" {
-				self = "agent"
-			}
-
-			m := monitorModel{store: st, jira: jc, selfPath: self}
-			m.reload()
-			p := tea.NewProgram(m, tea.WithAltScreen())
-			_, err = p.Run()
-			return err
-		},
+		Short:   "Live TUI hub: watch agents and run every command (also the default `agent`)",
+		RunE:    func(_ *cobra.Command, _ []string) error { return launchHub() },
 	}
 	rootCmd.AddCommand(c)
+}
+
+// launchHub opens the TUI hub. Shared by bare `agent` and `agent monitor`/`top`.
+func launchHub() error {
+	st, err := store.Open(paths.StateDB())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	// Best-effort Jira client for answer-and-resume; nil if not configured.
+	var jc *jira.Client
+	if cfg, cerr := config.Load(); cerr == nil && cfg.JiraBaseURL != "" {
+		jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
+	}
+	self, _ := os.Executable()
+	if self == "" {
+		self = "agent"
+	}
+
+	m := monitorModel{store: st, jira: jc, selfPath: self}
+	m.reload()
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	return err
 }
 
 // ---- liveness & triage -----------------------------------------------------
@@ -179,6 +181,14 @@ type monitorModel struct {
 
 	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
 	confirming string
+
+	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
+	view          hubView
+	paletteCursor int
+	runText       string // run-new input buffer
+	outputTitle   string
+	outputText    string
+	form          *formModel // active form (config/setup), nil otherwise
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -223,16 +233,18 @@ func (m *monitorModel) reload() {
 	}
 	m.groups = groups
 	m.flat = flat
-	if m.cursor >= len(flat) {
-		m.cursor = max(0, len(flat)-1)
+	if m.cursor > len(flat) { // index 0 = the Start-new row; agents are 1..len(flat)
+		m.cursor = len(flat)
 	}
 }
 
+// selected returns the highlighted agent, or nil when the cursor is on the
+// "Start new ticket(s)" row (index 0). Agents occupy indexes 1..len(flat).
 func (m *monitorModel) selected() *store.Session {
-	if m.cursor < 0 || m.cursor >= len(m.flat) {
+	if m.cursor <= 0 || m.cursor > len(m.flat) {
 		return nil
 	}
-	return &m.flat[m.cursor]
+	return &m.flat[m.cursor-1]
 }
 
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -253,43 +265,100 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "stopped " + msg.ticket + " — process killed, worktree removed"
 		m.reload()
 		return m, nil
+	case doctorDoneMsg:
+		m.outputTitle = "doctor — connectivity check"
+		m.outputText = msg.out
+		m.view = viewOutput
+		return m, nil
+	case formDoneMsg:
+		if msg.err != nil {
+			m.notice = "save failed: " + msg.err.Error()
+		} else {
+			m.notice = msg.notice
+		}
+		m.reload()
+		return m, nil
+	case runLaunchedMsg:
+		if msg.err != nil {
+			m.notice = "run failed: " + msg.err.Error()
+		} else {
+			m.notice = "launched run: " + msg.text
+		}
+		m.reload()
+		return m, nil
+	case daemonMsg:
+		if msg.err != nil {
+			m.notice = msg.action + " daemon: " + msg.err.Error()
+		} else {
+			m.notice = "daemon " + msg.action + "ed"
+		}
+		return m, nil
+	case claudeClosedMsg:
+		if msg.err != nil {
+			m.notice = "open Claude Code: " + msg.err.Error()
+		} else {
+			m.notice = "opened Claude Code in a new terminal"
+		}
+		return m, nil
 	case tea.KeyMsg:
-		if m.answering {
-			return m.updateAnswering(msg)
+		return m.dispatchKey(msg)
+	}
+	return m, nil
+}
+
+// dispatchKey routes a keystroke (real or synthesized by a button click) to the
+// active sub-view, else the dashboard keymap. Button-backed actions go through
+// doAction so keys and clicks stay in sync.
+func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// View-specific handlers take precedence over the dashboard keymap.
+	if m.answering {
+		return m.updateAnswering(msg)
+	}
+	if m.confirming != "" {
+		return m.updateConfirming(msg)
+	}
+	switch m.view {
+	case viewPalette:
+		return m.updatePalette(msg)
+	case viewRunInput:
+		return m.updateRunInput(msg)
+	case viewOutput:
+		return m.updateOutput(msg)
+	case viewForm:
+		return m.updateForm(msg)
+	}
+	switch msg.String() {
+	case "q", "ctrl+c", "esc":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
 		}
-		if m.confirming != "" {
-			return m.updateConfirming(msg)
+	case "down", "j":
+		if m.cursor < len(m.flat) { // index 0 = Start-new row, so max is len(flat)
+			m.cursor++
 		}
-		switch msg.String() {
-		case "q", "ctrl+c", "esc":
-			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.flat)-1 {
-				m.cursor++
-			}
-		case "r":
-			m.reload()
-		case "o":
-			if s := m.selected(); s != nil {
-				_ = exec.Command("open", paths.WorktreeFor(s.Ticket)).Start()
-			}
-		case "enter", "a":
-			if s := m.selected(); s != nil && s.State == "awaiting-answer" {
-				m.answering = true
-				m.input = ""
-				m.answerKey = s.Ticket
-				m.notice = ""
-			}
-		case "x":
-			if s := m.selected(); s != nil {
-				m.confirming = s.Ticket
-				m.notice = ""
-			}
+	case ":":
+		return m.doAction("menu")
+	case "n":
+		return m.doAction("run")
+	case "r":
+		return m.doAction("refresh")
+	case "o":
+		return m.doAction("studio")
+	case "c":
+		return m.doAction("claude")
+	case "enter":
+		if m.cursor == 0 { // the "Start new ticket(s)" row
+			return m.doAction("run")
 		}
+		return m.doAction("menu") // action menu for the selected agent
+	case "a":
+		return m.doAction("answer")
+	case "x":
+		return m.doAction("stop")
+	case "R":
+		return m.doAction("resume")
 	}
 	return m, nil
 }
@@ -406,6 +475,8 @@ var (
 	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
+	ctaSelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).Background(lipgloss.Color("231")).Bold(true).Padding(0, 1)
 )
 
 func (m monitorModel) View() string {
@@ -421,19 +492,68 @@ func (m monitorModel) View() string {
 			needs += len(g.sessions)
 		}
 	}
+	daemon := "○ daemon stopped"
+	if pid, ok := daemonAlive(); ok {
+		daemon = fmt.Sprintf("● daemon pid %d", pid)
+	}
 	b.WriteString(headerStyle.Render(fmt.Sprintf("magneton · %d agents · %d need you", len(m.flat), needs)))
-	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")) + "\n")
+	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")+"  ·  "+daemon) + "\n")
 
 	if m.err != nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  error: "+m.err.Error()) + "\n")
 		return b.String()
 	}
-	if len(m.flat) == 0 {
-		b.WriteString("\n  " + dimStyle.Render("no agents yet — run `agent run <TICKET|FILE>` or `agent start`") + "\n")
-		return b.String()
+
+	// Body for the active view; the action bar is appended at the bottom by frame.
+	var body string
+	switch m.view {
+	case viewPalette:
+		body = m.renderPalette(w)
+	case viewRunInput:
+		body = m.renderRunInput(w)
+	case viewOutput:
+		body = m.renderOutput(w)
+	case viewForm:
+		if m.form != nil {
+			body = m.form.render(w)
+		}
+	default:
+		body = m.renderDashboardBody(w)
 	}
 
-	idx := 0
+	notice := ""
+	if m.confirming != "" {
+		notice = whyStyle.Render(truncate("  Stop "+m.confirming+"? This kills its process and removes its worktree.", w))
+	} else if m.notice != "" {
+		notice = whyStyle.Render(truncate("  "+m.notice, w))
+	}
+	// Footer hint. Modal views render their own hints in the body.
+	footer := ""
+	if m.view == viewDashboard && !m.answering && m.confirming == "" {
+		footer = dimStyle.Render("  ↑↓ select · enter: choose · : commands · q: quit")
+	} else if m.confirming != "" {
+		footer = dimStyle.Render("  y: yes · n: no")
+	} else if m.answering {
+		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
+	}
+	return m.frame(b.String(), body, notice, footer, w)
+}
+
+// renderDashboardBody renders the triaged agent list + detail pane (no footer).
+func (m monitorModel) renderDashboardBody(w int) string {
+	var b strings.Builder
+	// Primary CTA as the first selectable row (index 0), above everything.
+	if m.cursor == 0 {
+		b.WriteString("  " + ctaSelStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press enter") + "\n\n")
+	} else {
+		b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + "\n\n")
+	}
+
+	if len(m.flat) == 0 {
+		b.WriteString("  " + dimStyle.Render("no agents running yet — select the row above and press enter to start one"))
+		return b.String()
+	}
+	idx := 1 // agents start at cursor index 1 (0 is the Start-new row)
 	listLines := 0
 	for _, g := range m.groups {
 		if len(g.sessions) == 0 {
@@ -452,7 +572,6 @@ func (m monitorModel) View() string {
 		}
 	}
 
-	// Detail pane: why-it-needs-you header + tail of the selected agent's log.
 	sel := m.selected()
 	if sel != nil {
 		hdr := "─ " + sel.Ticket
@@ -468,45 +587,58 @@ func (m monitorModel) View() string {
 		if sel.Summary != "" {
 			b.WriteString(headerStyle.Render(truncate("  "+sel.Summary, w)) + "\n")
 		}
-
-		why := whyLines(*sel)
-		for _, ln := range why {
+		for _, ln := range whyLines(*sel) {
 			b.WriteString(whyStyle.Render(truncate(ln, w)) + "\n")
 		}
-
 		if m.answering {
-			// Focused input box; the log tail is hidden to keep attention here.
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
-			b.WriteString("  › " + m.input + "▌\n")
-			b.WriteString("  " + dimStyle.Render("[enter] send & resume · [esc] cancel") + "\n")
+			b.WriteString("  › " + m.input + "▌")
 		} else {
-			detailH := m.height - listLines - 6 - len(why)
+			detailH := m.height - listLines - 10 - len(whyLines(*sel))
 			if detailH < 3 {
 				detailH = 3
 			}
 			lines := tailLines(paths.LogFor(sel.Ticket), detailH)
 			if len(lines) == 0 {
-				b.WriteString("  " + dimStyle.Render("(no log output yet)") + "\n")
+				b.WriteString("  " + dimStyle.Render("(no log output yet)"))
 			}
-			for _, ln := range lines {
-				b.WriteString(truncate(stripPrefix(ln, sel.Ticket), w) + "\n")
+			for i, ln := range lines {
+				b.WriteString(truncate(stripPrefix(ln, sel.Ticket), w))
+				if i < len(lines)-1 {
+					b.WriteString("\n")
+				}
 			}
 		}
 	}
+	return b.String()
+}
 
+// frame composes header + body + a bottom-pinned footer (separator, optional
+// notice, action bar). Padding keeps the action bar on the last row so clicks
+// hit it (mouse Y == height-1).
+func (m monitorModel) frame(head, body, notice, bar string, w int) string {
+	var b strings.Builder
+	b.WriteString(head)
+	if !strings.HasSuffix(head, "\n") {
+		b.WriteString("\n")
+	}
+	if body != "" {
+		b.WriteString(strings.TrimRight(body, "\n") + "\n")
+	}
+	footerLines := 2 // separator + bar
+	if notice != "" {
+		footerLines++
+	}
+	if m.height > 0 {
+		for i := strings.Count(b.String(), "\n") + footerLines; i < m.height; i++ {
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString(sepStyle.Render(strings.Repeat("─", w)) + "\n")
-	if m.confirming != "" {
-		b.WriteString(whyStyle.Render(truncate("  Stop "+m.confirming+"? Kills its process + removes its worktree.  [y] yes   [n] no", w)) + "\n")
-	} else if m.notice != "" {
-		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
+	if notice != "" {
+		b.WriteString(notice + "\n")
 	}
-	hint := "↑↓ select · ↵ answer · x stop · o open · r refresh · q quit · live every 1s"
-	if m.answering {
-		hint = "typing… [enter] send & resume · [esc] cancel"
-	} else if m.confirming != "" {
-		hint = "confirm stop: [y] yes · [n] no"
-	}
-	b.WriteString(dimStyle.Render(hint))
+	b.WriteString(bar)
 	return b.String()
 }
 
@@ -533,9 +665,15 @@ func whyLines(s store.Session) []string {
 		}
 		return []string{"▮ Needs you — press ↵ enter to respond (see log below)."}
 	case "failed":
-		return []string{"✗ Failed — " + failReason(s.Ticket)}
+		return []string{
+			"✗ Failed — " + failReason(s.Ticket),
+			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
+		}
 	case "needs-you":
-		return []string{"⚑ Needs you — the agent got stuck (see log below)."}
+		return []string{
+			"⚑ Needs you — the agent got stuck (see log below).",
+			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
+		}
 	}
 	return nil
 }
