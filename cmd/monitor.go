@@ -465,6 +465,9 @@ func (m monitorModel) View() string {
 			}
 		}
 		b.WriteString(sepStyle.Render(truncate(hdr+" "+strings.Repeat("─", w), w)) + "\n")
+		if sel.Summary != "" {
+			b.WriteString(headerStyle.Render(truncate("  "+sel.Summary, w)) + "\n")
+		}
 
 		why := whyLines(*sel)
 		for _, ln := range why {
@@ -550,21 +553,23 @@ func failReason(ticket string) string {
 }
 
 func (m monitorModel) renderRow(s store.Session, w int) string {
-	activity := cleanActivity(tailLines(paths.LogFor(s.Ticket), 1), s.Ticket)
-	if activity == "" {
-		activity = s.Summary
+	// Show the ticket title so each row says what work it is, at a glance.
+	// Fall back to the latest log line only if there's no title.
+	desc := s.Summary
+	if desc == "" {
+		desc = cleanActivity(tailLines(paths.LogFor(s.Ticket), 1), s.Ticket)
 	}
 	retries := ""
 	if s.Retries > 0 {
 		retries = fmt.Sprintf(" ×%d", s.Retries)
 	}
-	left := fmt.Sprintf("  %s %-8s %-11s", glyphFor(s), s.Ticket, stateLabel(s)+retries)
+	left := fmt.Sprintf("  %s %-9s %-11s", glyphFor(s), s.Ticket, stateLabel(s)+retries)
 	right := fmt.Sprintf(" %4s", age(s.UpdatedAt))
 	flex := w - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if flex < 6 {
 		flex = 6
 	}
-	return left + fmt.Sprintf(" %-*s", flex, truncate(activity, flex)) + right
+	return left + fmt.Sprintf(" %-*s", flex, truncate(desc, flex)) + right
 }
 
 // ---- helpers ---------------------------------------------------------------
