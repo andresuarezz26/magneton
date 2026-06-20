@@ -256,6 +256,15 @@ android_sdk_path = "~/Library/Android/sdk"
 
 ## Usage
 
+### The hub (default)
+
+Running **`agent`** with no arguments opens the TUI hub — the home base. It's a live
+dashboard of every agent plus a command palette (press `:`) for everything else:
+run a ticket (`n`), answer a blocked agent (`↵`), stop one (`x`), run `doctor`, edit
+config, the setup wizard, and start/stop the daemon — without leaving the screen. The
+header shows daemon status. All the subcommands below still work for scripts/CI, and
+`agent monitor`/`agent top` open the same hub.
+
 ```bash
 agent init                     # scaffold config + run connectivity check
 agent doctor                   # check config path + connectivity (no prompts)

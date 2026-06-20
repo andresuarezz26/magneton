@@ -30,32 +30,34 @@ func init() {
 	c := &cobra.Command{
 		Use:     "monitor",
 		Aliases: []string{"top"},
-		Short:   "Live TUI dashboard: watch agents, answer their questions, and resume them",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			st, err := store.Open(paths.StateDB())
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-
-			// Best-effort Jira client for answer-and-resume; nil if not configured.
-			var jc *jira.Client
-			if cfg, cerr := config.Load(); cerr == nil && cfg.JiraBaseURL != "" {
-				jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-			}
-			self, _ := os.Executable()
-			if self == "" {
-				self = "agent"
-			}
-
-			m := monitorModel{store: st, jira: jc, selfPath: self}
-			m.reload()
-			p := tea.NewProgram(m, tea.WithAltScreen())
-			_, err = p.Run()
-			return err
-		},
+		Short:   "Live TUI hub: watch agents and run every command (also the default `agent`)",
+		RunE:    func(_ *cobra.Command, _ []string) error { return launchHub() },
 	}
 	rootCmd.AddCommand(c)
+}
+
+// launchHub opens the TUI hub. Shared by bare `agent` and `agent monitor`/`top`.
+func launchHub() error {
+	st, err := store.Open(paths.StateDB())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	// Best-effort Jira client for answer-and-resume; nil if not configured.
+	var jc *jira.Client
+	if cfg, cerr := config.Load(); cerr == nil && cfg.JiraBaseURL != "" {
+		jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
+	}
+	self, _ := os.Executable()
+	if self == "" {
+		self = "agent"
+	}
+
+	m := monitorModel{store: st, jira: jc, selfPath: self}
+	m.reload()
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	return err
 }
 
 // ---- liveness & triage -----------------------------------------------------
@@ -179,6 +181,14 @@ type monitorModel struct {
 
 	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
 	confirming string
+
+	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
+	view          hubView
+	paletteCursor int
+	runText       string // run-new input buffer
+	outputTitle   string
+	outputText    string
+	form          *formModel // active form (config/setup), nil otherwise
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -253,16 +263,63 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "stopped " + msg.ticket + " — process killed, worktree removed"
 		m.reload()
 		return m, nil
+	case doctorDoneMsg:
+		m.outputTitle = "doctor — connectivity check"
+		m.outputText = msg.out
+		m.view = viewOutput
+		return m, nil
+	case formDoneMsg:
+		if msg.err != nil {
+			m.notice = "save failed: " + msg.err.Error()
+		} else {
+			m.notice = msg.notice
+		}
+		m.reload()
+		return m, nil
+	case runLaunchedMsg:
+		if msg.err != nil {
+			m.notice = "run failed: " + msg.err.Error()
+		} else {
+			m.notice = "launched run: " + msg.text
+		}
+		m.reload()
+		return m, nil
+	case daemonMsg:
+		if msg.err != nil {
+			m.notice = msg.action + " daemon: " + msg.err.Error()
+		} else {
+			m.notice = "daemon " + msg.action + "ed"
+		}
+		return m, nil
 	case tea.KeyMsg:
+		// View-specific handlers take precedence over the dashboard keymap.
 		if m.answering {
 			return m.updateAnswering(msg)
 		}
 		if m.confirming != "" {
 			return m.updateConfirming(msg)
 		}
+		switch m.view {
+		case viewPalette:
+			return m.updatePalette(msg)
+		case viewRunInput:
+			return m.updateRunInput(msg)
+		case viewOutput:
+			return m.updateOutput(msg)
+		case viewForm:
+			return m.updateForm(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
+		case ":", "c":
+			m.view = viewPalette
+			m.paletteCursor = 0
+			m.notice = ""
+		case "n":
+			m.view = viewRunInput
+			m.runText = ""
+			m.notice = ""
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -421,15 +478,35 @@ func (m monitorModel) View() string {
 			needs += len(g.sessions)
 		}
 	}
+	daemon := "○ daemon stopped"
+	if pid, ok := daemonAlive(); ok {
+		daemon = fmt.Sprintf("● daemon pid %d", pid)
+	}
 	b.WriteString(headerStyle.Render(fmt.Sprintf("magneton · %d agents · %d need you", len(m.flat), needs)))
-	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")) + "\n")
+	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")+"  ·  "+daemon) + "\n")
 
 	if m.err != nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  error: "+m.err.Error()) + "\n")
 		return b.String()
 	}
+
+	// Non-dashboard views render their own body and return.
+	switch m.view {
+	case viewPalette:
+		return b.String() + "\n" + m.renderPalette(w)
+	case viewRunInput:
+		return b.String() + "\n" + m.renderRunInput(w)
+	case viewOutput:
+		return b.String() + "\n" + m.renderOutput(w)
+	case viewForm:
+		if m.form != nil {
+			return b.String() + "\n" + m.form.render(w)
+		}
+	}
+
 	if len(m.flat) == 0 {
-		b.WriteString("\n  " + dimStyle.Render("no agents yet — run `agent run <TICKET|FILE>` or `agent start`") + "\n")
+		b.WriteString("\n  " + dimStyle.Render("no agents yet — press : for commands, or n to run a ticket") + "\n")
+		b.WriteString(dimStyle.Render("  : commands · n run · q quit"))
 		return b.String()
 	}
 
@@ -500,7 +577,7 @@ func (m monitorModel) View() string {
 	} else if m.notice != "" {
 		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
 	}
-	hint := "↑↓ select · ↵ answer · x stop · o open · r refresh · q quit · live every 1s"
+	hint := "↑↓ select · ↵ answer · x stop · : commands · n run · o open · q quit"
 	if m.answering {
 		hint = "typing… [enter] send & resume · [esc] cancel"
 	} else if m.confirming != "" {

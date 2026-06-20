@@ -1,0 +1,81 @@
+package cmd
+
+import (
+	"testing"
+
+	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/paths"
+)
+
+func TestConfigFieldsRoundTrip(t *testing.T) {
+	in := &config.Config{
+		JiraBaseURL:          "https://x.atlassian.net",
+		JiraEmail:            "me@x.com",
+		JiraInProgressStatus: "En curso",
+		Concurrency:          5,
+		Repos: []config.Repo{{
+			Path: "/r", JQL: "q", Branch: "b", Compile: "c", Test: "t",
+		}},
+	}
+	out := &config.Config{}
+	applyConfigFields(out, configFields(in))
+
+	if out.JiraBaseURL != in.JiraBaseURL || out.JiraEmail != in.JiraEmail ||
+		out.JiraInProgressStatus != in.JiraInProgressStatus || out.Concurrency != 5 {
+		t.Errorf("scalar round-trip failed: %+v", out)
+	}
+	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Compile != "c" {
+		t.Errorf("repo round-trip failed: %+v", out.Repos)
+	}
+}
+
+func TestPaletteItemsDaemonStopped(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir()) // no pidfile → daemon not alive
+	items := monitorModel{}.paletteItems()
+	keys := make([]string, len(items))
+	for i, it := range items {
+		keys[i] = it.key
+	}
+	has := func(k string) bool {
+		for _, x := range keys {
+			if x == k {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("run") || !has("doctor") || !has("config") || !has("setup") {
+		t.Errorf("missing core commands: %v", keys)
+	}
+	if !has("start") || has("stop") {
+		t.Errorf("daemon stopped should offer Start, not Stop: %v", keys)
+	}
+	if keys[len(keys)-1] != "quit" {
+		t.Errorf("Quit should be last: %v", keys)
+	}
+}
+
+func TestRunPaletteItemTransitions(t *testing.T) {
+	// "run" → run-input view.
+	mm, _ := monitorModel{}.runPaletteItem("run")
+	if mm.(monitorModel).view != viewRunInput {
+		t.Error("run should open the run-input view")
+	}
+
+	// "config" with a saved config → form view with a non-nil form.
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(&config.Config{JiraBaseURL: "u", Concurrency: 3}); err != nil {
+		t.Fatal(err)
+	}
+	mm, _ = monitorModel{}.runPaletteItem("config")
+	hub := mm.(monitorModel)
+	if hub.view != viewForm || hub.form == nil {
+		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)
+	}
+	if len(hub.form.fields) != 9 {
+		t.Errorf("config form should have 9 fields, got %d", len(hub.form.fields))
+	}
+}
