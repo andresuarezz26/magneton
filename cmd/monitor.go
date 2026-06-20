@@ -56,7 +56,7 @@ func launchHub() error {
 
 	m := monitorModel{store: st, jira: jc, selfPath: self}
 	m.reload()
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -291,68 +291,60 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "daemon " + msg.action + "ed"
 		}
 		return m, nil
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	case tea.KeyMsg:
-		// View-specific handlers take precedence over the dashboard keymap.
-		if m.answering {
-			return m.updateAnswering(msg)
+		return m.dispatchKey(msg)
+	}
+	return m, nil
+}
+
+// dispatchKey routes a keystroke (real or synthesized by a button click) to the
+// active sub-view, else the dashboard keymap. Button-backed actions go through
+// doAction so keys and clicks stay in sync.
+func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// View-specific handlers take precedence over the dashboard keymap.
+	if m.answering {
+		return m.updateAnswering(msg)
+	}
+	if m.confirming != "" {
+		return m.updateConfirming(msg)
+	}
+	switch m.view {
+	case viewPalette:
+		return m.updatePalette(msg)
+	case viewRunInput:
+		return m.updateRunInput(msg)
+	case viewOutput:
+		return m.updateOutput(msg)
+	case viewForm:
+		return m.updateForm(msg)
+	}
+	switch msg.String() {
+	case "q", "ctrl+c", "esc":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
 		}
-		if m.confirming != "" {
-			return m.updateConfirming(msg)
+	case "down", "j":
+		if m.cursor < len(m.flat)-1 {
+			m.cursor++
 		}
-		switch m.view {
-		case viewPalette:
-			return m.updatePalette(msg)
-		case viewRunInput:
-			return m.updateRunInput(msg)
-		case viewOutput:
-			return m.updateOutput(msg)
-		case viewForm:
-			return m.updateForm(msg)
-		}
-		switch msg.String() {
-		case "q", "ctrl+c", "esc":
-			return m, tea.Quit
-		case ":", "c":
-			m.view = viewPalette
-			m.paletteCursor = 0
-			m.notice = ""
-		case "n":
-			m.view = viewRunInput
-			m.runText = ""
-			m.notice = ""
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.flat)-1 {
-				m.cursor++
-			}
-		case "r":
-			m.reload()
-		case "o":
-			if s := m.selected(); s != nil {
-				_ = exec.Command("open", paths.WorktreeFor(s.Ticket)).Start()
-			}
-		case "enter", "a":
-			if s := m.selected(); s != nil && s.State == "awaiting-answer" {
-				m.answering = true
-				m.input = ""
-				m.answerKey = s.Ticket
-				m.notice = ""
-			}
-		case "x":
-			if s := m.selected(); s != nil {
-				m.confirming = s.Ticket
-				m.notice = ""
-			}
-		case "R":
-			// Resume: verify & ship the selected ticket's worktree after a manual fix.
-			if s := m.selected(); s != nil {
-				m.notice = "resuming " + s.Ticket + " (verify & ship)…"
-				return m, m.launchRun(s.Ticket + " --resume")
-			}
-		}
+	case ":", "c":
+		return m.doAction("menu")
+	case "n":
+		return m.doAction("run")
+	case "r":
+		return m.doAction("refresh")
+	case "o":
+		return m.doAction("open")
+	case "enter", "a":
+		return m.doAction("answer")
+	case "x":
+		return m.doAction("stop")
+	case "R":
+		return m.doAction("resume")
 	}
 	return m, nil
 }
@@ -496,26 +488,39 @@ func (m monitorModel) View() string {
 		return b.String()
 	}
 
-	// Non-dashboard views render their own body and return.
+	// Body for the active view; the action bar is appended at the bottom by frame.
+	var body string
 	switch m.view {
 	case viewPalette:
-		return b.String() + "\n" + m.renderPalette(w)
+		body = m.renderPalette(w)
 	case viewRunInput:
-		return b.String() + "\n" + m.renderRunInput(w)
+		body = m.renderRunInput(w)
 	case viewOutput:
-		return b.String() + "\n" + m.renderOutput(w)
+		body = m.renderOutput(w)
 	case viewForm:
 		if m.form != nil {
-			return b.String() + "\n" + m.form.render(w)
+			body = m.form.render(w)
 		}
+	default:
+		body = m.renderDashboardBody(w)
 	}
 
+	notice := ""
+	if m.confirming != "" {
+		notice = whyStyle.Render(truncate("  Stop "+m.confirming+"? This kills its process and removes its worktree.", w))
+	} else if m.notice != "" {
+		notice = whyStyle.Render(truncate("  "+m.notice, w))
+	}
+	bar, _ := m.renderActionBar()
+	return m.frame(b.String(), body, notice, bar, w)
+}
+
+// renderDashboardBody renders the triaged agent list + detail pane (no footer).
+func (m monitorModel) renderDashboardBody(w int) string {
 	if len(m.flat) == 0 {
-		b.WriteString("\n  " + dimStyle.Render("no agents yet — press : for commands, or n to run a ticket") + "\n")
-		b.WriteString(dimStyle.Render("  : commands · n run · q quit"))
-		return b.String()
+		return "\n  " + dimStyle.Render("no agents yet — click Run new below, or Menu for the rest")
 	}
-
+	var b strings.Builder
 	idx := 0
 	listLines := 0
 	for _, g := range m.groups {
@@ -535,7 +540,6 @@ func (m monitorModel) View() string {
 		}
 	}
 
-	// Detail pane: why-it-needs-you header + tail of the selected agent's log.
 	sel := m.selected()
 	if sel != nil {
 		hdr := "─ " + sel.Ticket
@@ -551,45 +555,58 @@ func (m monitorModel) View() string {
 		if sel.Summary != "" {
 			b.WriteString(headerStyle.Render(truncate("  "+sel.Summary, w)) + "\n")
 		}
-
-		why := whyLines(*sel)
-		for _, ln := range why {
+		for _, ln := range whyLines(*sel) {
 			b.WriteString(whyStyle.Render(truncate(ln, w)) + "\n")
 		}
-
 		if m.answering {
-			// Focused input box; the log tail is hidden to keep attention here.
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
-			b.WriteString("  › " + m.input + "▌\n")
-			b.WriteString("  " + dimStyle.Render("[enter] send & resume · [esc] cancel") + "\n")
+			b.WriteString("  › " + m.input + "▌")
 		} else {
-			detailH := m.height - listLines - 6 - len(why)
+			detailH := m.height - listLines - 8 - len(whyLines(*sel))
 			if detailH < 3 {
 				detailH = 3
 			}
 			lines := tailLines(paths.LogFor(sel.Ticket), detailH)
 			if len(lines) == 0 {
-				b.WriteString("  " + dimStyle.Render("(no log output yet)") + "\n")
+				b.WriteString("  " + dimStyle.Render("(no log output yet)"))
 			}
-			for _, ln := range lines {
-				b.WriteString(truncate(stripPrefix(ln, sel.Ticket), w) + "\n")
+			for i, ln := range lines {
+				b.WriteString(truncate(stripPrefix(ln, sel.Ticket), w))
+				if i < len(lines)-1 {
+					b.WriteString("\n")
+				}
 			}
 		}
 	}
+	return b.String()
+}
 
+// frame composes header + body + a bottom-pinned footer (separator, optional
+// notice, action bar). Padding keeps the action bar on the last row so clicks
+// hit it (mouse Y == height-1).
+func (m monitorModel) frame(head, body, notice, bar string, w int) string {
+	var b strings.Builder
+	b.WriteString(head)
+	if !strings.HasSuffix(head, "\n") {
+		b.WriteString("\n")
+	}
+	if body != "" {
+		b.WriteString(strings.TrimRight(body, "\n") + "\n")
+	}
+	footerLines := 2 // separator + bar
+	if notice != "" {
+		footerLines++
+	}
+	if m.height > 0 {
+		for i := strings.Count(b.String(), "\n") + footerLines; i < m.height; i++ {
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString(sepStyle.Render(strings.Repeat("─", w)) + "\n")
-	if m.confirming != "" {
-		b.WriteString(whyStyle.Render(truncate("  Stop "+m.confirming+"? Kills its process + removes its worktree.  [y] yes   [n] no", w)) + "\n")
-	} else if m.notice != "" {
-		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
+	if notice != "" {
+		b.WriteString(notice + "\n")
 	}
-	hint := "↑↓ select · ↵ answer · o open · R resume · x stop · : commands · n run · q quit"
-	if m.answering {
-		hint = "typing… [enter] send & resume · [esc] cancel"
-	} else if m.confirming != "" {
-		hint = "confirm stop: [y] yes · [n] no"
-	}
-	b.WriteString(dimStyle.Render(hint))
+	b.WriteString(bar)
 	return b.String()
 }
 
