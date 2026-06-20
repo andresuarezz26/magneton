@@ -476,6 +476,7 @@ var (
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
+	ctaSelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).Background(lipgloss.Color("231")).Bold(true).Padding(0, 1)
 )
 
 func (m monitorModel) View() string {
@@ -543,9 +544,9 @@ func (m monitorModel) renderDashboardBody(w int) string {
 	var b strings.Builder
 	// Primary CTA as the first selectable row (index 0), above everything.
 	if m.cursor == 0 {
-		b.WriteString("  " + selStyle.Render(" ＋ Start new ticket(s) ") + "\n\n")
+		b.WriteString("  " + ctaSelStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press enter") + "\n\n")
 	} else {
-		b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press enter") + "\n\n")
+		b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + "\n\n")
 	}
 
 	if len(m.flat) == 0 {

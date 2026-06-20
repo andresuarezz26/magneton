@@ -56,7 +56,7 @@ func (m monitorModel) paletteItems() []paletteItem {
 		items = append(items, agentActions(*s)...)
 	}
 	items = append(items,
-		paletteItem{"run", "Run new ticket…", "launch a ticket key or .md file"},
+		paletteItem{"run", "Start new ticket(s)", "launch a ticket key or .md file"},
 		paletteItem{"doctor", "Doctor", "connectivity + setup health check"},
 		paletteItem{"config", "Edit config", "edit ~/.agent/config.toml fields"},
 		paletteItem{"setup", "Setup wizard", "configure Jira, repo, and tokens"},
@@ -146,7 +146,7 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m monitorModel) renderRunInput(w int) string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("  Run new") + "\n")
+	b.WriteString(headerStyle.Render("  Start new ticket(s)") + "\n")
 	b.WriteString(dimStyle.Render("  ticket key(s) or .md path(s), space-separated") + "\n\n")
 	b.WriteString("  › " + m.runText + "▌\n")
 	b.WriteString("\n  " + dimStyle.Render("enter launch · esc cancel"))
