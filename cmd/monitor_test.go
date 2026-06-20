@@ -67,23 +67,46 @@ func TestGlyphFor(t *testing.T) {
 	}
 }
 
+func TestPidAlive(t *testing.T) {
+	if !pidAlive(os.Getpid()) {
+		t.Error("our own pid should be alive")
+	}
+	if pidAlive(0) {
+		t.Error("pid 0 is not a real process")
+	}
+	if pidAlive(2_000_000_000) {
+		t.Error("an absurd pid should not be alive")
+	}
+}
+
 func TestIsStopped(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-time.Hour)
-	// running state, idle long → stopped (no log file, so freshest = UpdatedAt)
-	if !isStopped(store.Session{Ticket: "NOPE-1", State: "working", UpdatedAt: old}) {
-		t.Error("idle running session should be stopped")
+	dead := 2_000_000_000 // almost certainly not a live process
+	live := os.Getpid()
+
+	// Known pid, dead → stopped (deterministic, even if recently updated).
+	if !isStopped(store.Session{State: "working", PID: dead, UpdatedAt: now}) {
+		t.Error("running session with a dead pid should be stopped")
 	}
-	// running state, fresh → not stopped
+	// Known pid, alive → NOT stopped, even if idle a long time.
+	if isStopped(store.Session{State: "working", PID: live, UpdatedAt: old}) {
+		t.Error("running session with a live pid should not be stopped")
+	}
+	// No pid (old row), idle long → stopped via the activity-heuristic fallback.
+	if !isStopped(store.Session{Ticket: "NOPE-1", State: "working", UpdatedAt: old}) {
+		t.Error("idle running session with no pid should be stopped (fallback)")
+	}
+	// No pid, fresh → not stopped.
 	if isStopped(store.Session{Ticket: "NOPE-2", State: "working", UpdatedAt: now}) {
 		t.Error("fresh running session should not be stopped")
 	}
-	// terminal/needs-you states are never "stopped" even if old
-	if isStopped(store.Session{Ticket: "NOPE-3", State: "failed", UpdatedAt: old}) {
-		t.Error("failed is not a running state; should never be stopped")
+	// Terminal/needs-you states are never "stopped", even with a dead pid.
+	if isStopped(store.Session{State: "failed", PID: dead, UpdatedAt: old}) {
+		t.Error("failed is not a running state; never stopped")
 	}
-	if isStopped(store.Session{Ticket: "NOPE-4", State: "review", UpdatedAt: old}) {
-		t.Error("review is terminal; should never be stopped")
+	if isStopped(store.Session{State: "review", UpdatedAt: old}) {
+		t.Error("review is terminal; never stopped")
 	}
 }
 

@@ -78,9 +78,27 @@ func freshest(s store.Session) time.Time {
 	return t
 }
 
-// isStopped: a running-state session whose process looks gone (idle too long).
+// pidAlive reports whether process pid currently exists (deterministic, via
+// signal 0). EPERM means it exists but we can't signal it — still alive.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+// isStopped: a running-state session whose process is gone. When we know the
+// pid (recorded at run start) the check is deterministic; for older rows with
+// no pid we fall back to the activity heuristic.
 func isStopped(s store.Session) bool {
-	return isRunningState(s.State) && time.Since(freshest(s)) > stoppedAfter
+	if !isRunningState(s.State) {
+		return false
+	}
+	if s.PID > 0 {
+		return !pidAlive(s.PID)
+	}
+	return time.Since(freshest(s)) > stoppedAfter
 }
 
 type group struct {
@@ -372,7 +390,16 @@ func (m monitorModel) View() string {
 	// Detail pane: why-it-needs-you header + tail of the selected agent's log.
 	sel := m.selected()
 	if sel != nil {
-		b.WriteString(sepStyle.Render(truncate("─ "+sel.Ticket+" "+strings.Repeat("─", w), w)) + "\n")
+		hdr := "─ " + sel.Ticket
+		if sel.PID > 0 {
+			hdr += fmt.Sprintf(" · pid %d", sel.PID)
+			if pidAlive(sel.PID) {
+				hdr += " alive"
+			} else {
+				hdr += " gone"
+			}
+		}
+		b.WriteString(sepStyle.Render(truncate(hdr+" "+strings.Repeat("─", w), w)) + "\n")
 
 		why := whyLines(*sel)
 		for _, ln := range why {
@@ -414,9 +441,13 @@ func (m monitorModel) View() string {
 // whyLines explains, for a needs-you/stopped/failed agent, what it's blocked on.
 func whyLines(s store.Session) []string {
 	if isStopped(s) {
+		reason := fmt.Sprintf("no activity for %s", age(freshest(s)))
+		if s.PID > 0 {
+			reason = fmt.Sprintf("process %d is gone", s.PID)
+		}
 		return []string{
-			fmt.Sprintf("■ Stopped — no activity for %s; the process running this looks gone.", age(freshest(s))),
-			"  Re-run the ticket to resume, or press o to inspect the worktree.",
+			fmt.Sprintf("■ Stopped — %s. Re-run the ticket to resume.", reason),
+			"  Press o to inspect the worktree.",
 		}
 	}
 	switch s.State {

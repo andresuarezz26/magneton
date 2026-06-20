@@ -194,6 +194,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 
 	// State store so `agent status` reflects manual runs too.
 	_, _ = st.Claim(sp.ticket, repo.Path, summary)
+	_ = st.SetPID(sp.ticket, os.Getpid()) // for monitor liveness (kill -0)
 
 	hooks := runner.Hooks{
 		Logf:    logf,
