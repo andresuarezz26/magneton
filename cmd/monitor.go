@@ -291,6 +291,12 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "daemon " + msg.action + "ed"
 		}
 		return m, nil
+	case claudeClosedMsg:
+		if msg.err != nil {
+			m.notice = "claude code: " + msg.err.Error()
+		}
+		m.reload()
+		return m, nil
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 	case tea.KeyMsg:
@@ -331,14 +337,16 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.flat)-1 {
 			m.cursor++
 		}
-	case ":", "c":
+	case ":":
 		return m.doAction("menu")
 	case "n":
 		return m.doAction("run")
 	case "r":
 		return m.doAction("refresh")
 	case "o":
-		return m.doAction("open")
+		return m.doAction("studio")
+	case "c":
+		return m.doAction("claude")
 	case "enter", "a":
 		return m.doAction("answer")
 	case "x":
@@ -635,12 +643,12 @@ func whyLines(s store.Session) []string {
 	case "failed":
 		return []string{
 			"✗ Failed — " + failReason(s.Ticket),
-			"  Fix it in the worktree (o), then R to resume — verify & ship.",
+			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
 		}
 	case "needs-you":
 		return []string{
 			"⚑ Needs you — the agent got stuck (see log below).",
-			"  Fix it in the worktree (o), then R to resume — verify & ship.",
+			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
 		}
 	}
 	return nil

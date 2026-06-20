@@ -64,7 +64,10 @@ func (m monitorModel) currentActions() []actionBtn {
 		case s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(*s):
 			btns = append(btns, actionBtn{label: "Resume", key: "R", id: "resume", primary: true})
 		}
-		btns = append(btns, actionBtn{label: "Open worktree", key: "o", id: "open"})
+		btns = append(btns,
+			actionBtn{label: "Open Android Studio", key: "o", id: "studio"},
+			actionBtn{label: "Open Claude Code", key: "c", id: "claude"},
+		)
 		if s.State != "review" && s.State != "merged" && s.State != "closed" {
 			btns = append(btns, actionBtn{label: "Stop", key: "x", id: "stop"})
 		}
@@ -121,6 +124,22 @@ func (m monitorModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// claudeClosedMsg is returned after an interactive Claude Code session exits.
+type claudeClosedMsg struct{ err error }
+
+// openClaude hands the terminal to an interactive Claude Code session in the
+// ticket's worktree, resuming the agent's stored session when there is one.
+// tea.ExecProcess suspends the TUI and restores it when claude exits.
+func (m monitorModel) openClaude(s store.Session) tea.Cmd {
+	args := []string{}
+	if s.SessionID != "" {
+		args = []string{"--resume", s.SessionID}
+	}
+	c := exec.Command("claude", args...)
+	c.Dir = paths.WorktreeFor(s.Ticket)
+	return tea.ExecProcess(c, func(err error) tea.Msg { return claudeClosedMsg{err: err} })
+}
+
 // doAction runs a CTA by id. Buttons (click) and keys both route here.
 func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	switch id {
@@ -131,9 +150,13 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			m.answerKey = s.Ticket
 			m.notice = ""
 		}
-	case "open":
+	case "studio":
 		if s := m.selected(); s != nil {
-			_ = exec.Command("open", paths.WorktreeFor(s.Ticket)).Start()
+			_ = exec.Command("open", "-a", "Android Studio", paths.WorktreeFor(s.Ticket)).Start()
+		}
+	case "claude":
+		if s := m.selected(); s != nil {
+			return m, m.openClaude(*s)
 		}
 	case "resume":
 		if s := m.selected(); s != nil {

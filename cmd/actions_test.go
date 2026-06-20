@@ -18,7 +18,7 @@ func TestCurrentActionsContextual(t *testing.T) {
 	// awaiting-answer → Answer is the primary CTA.
 	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}}
 	ids := actionIDs(m.currentActions())
-	for _, want := range []string{"answer", "open", "stop", "run", "menu", "quit"} {
+	for _, want := range []string{"answer", "studio", "claude", "stop", "run", "menu", "quit"} {
 		if !ids[want] {
 			t.Errorf("awaiting: missing action %q", want)
 		}
