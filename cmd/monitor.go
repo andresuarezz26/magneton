@@ -346,6 +346,12 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirming = s.Ticket
 				m.notice = ""
 			}
+		case "R":
+			// Resume: verify & ship the selected ticket's worktree after a manual fix.
+			if s := m.selected(); s != nil {
+				m.notice = "resuming " + s.Ticket + " (verify & ship)…"
+				return m, m.launchRun(s.Ticket + " --resume")
+			}
 		}
 	}
 	return m, nil
@@ -577,7 +583,7 @@ func (m monitorModel) View() string {
 	} else if m.notice != "" {
 		b.WriteString(whyStyle.Render(truncate("  "+m.notice, w)) + "\n")
 	}
-	hint := "↑↓ select · ↵ answer · x stop · : commands · n run · o open · q quit"
+	hint := "↑↓ select · ↵ answer · o open · R resume · x stop · : commands · n run · q quit"
 	if m.answering {
 		hint = "typing… [enter] send & resume · [esc] cancel"
 	} else if m.confirming != "" {
@@ -610,9 +616,15 @@ func whyLines(s store.Session) []string {
 		}
 		return []string{"▮ Needs you — press ↵ enter to respond (see log below)."}
 	case "failed":
-		return []string{"✗ Failed — " + failReason(s.Ticket)}
+		return []string{
+			"✗ Failed — " + failReason(s.Ticket),
+			"  Fix it in the worktree (o), then R to resume — verify & ship.",
+		}
 	case "needs-you":
-		return []string{"⚑ Needs you — the agent got stuck (see log below)."}
+		return []string{
+			"⚑ Needs you — the agent got stuck (see log below).",
+			"  Fix it in the worktree (o), then R to resume — verify & ship.",
+		}
 	}
 	return nil
 }

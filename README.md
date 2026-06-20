@@ -271,6 +271,7 @@ agent doctor                   # check config path + connectivity (no prompts)
 
 agent run PROJ-123             # run one Jira ticket end-to-end
 agent run PROJ-123 --dry-run   # everything except push + PR (safe first run)
+agent run PROJ-123 --resume    # after a manual fix: re-gate the existing worktree, then PR
 agent logs PROJ-123            # print the session log
 
 # No Jira required — point it at local markdown files:
@@ -325,15 +326,25 @@ reply in comments — magneton reads the description). Then re-run the command s
 
 ### When the agent gets stuck
 
-If the build gate fails after all retries, magneton comments on the Jira ticket
-with the error details and the worktree path so you can investigate:
+If the build gate fails after all retries (state `needs-you`/`failed`), magneton
+comments on the Jira ticket with the error details and the worktree path so you
+can investigate:
 
 ```bash
 open -a "Android Studio" ~/.agent/worktrees/PROJ-123
 ```
 
-Fix the issue in the worktree or update the ticket description, then re-run
-`agent run PROJ-123`.
+**Fix it by hand, then resume** — magneton keeps *your* changes, re-runs the gate
+on them, and (if green) commits + opens the PR. It does **not** re-plan or let the
+agent touch your fix:
+
+```bash
+agent run PROJ-123 --resume
+```
+
+(In the TUI: select the ticket, `o` to open the worktree, fix it, then `R` to
+resume.) A plain `agent run PROJ-123` (no `--resume`) starts over from scratch and
+**discards** uncommitted worktree changes — use `--resume` to keep a manual fix.
 
 ### Safety rails
 

@@ -22,6 +22,7 @@ var (
 	runLocal  bool
 	runTitle  string
 	runDesc   string
+	runResume bool
 )
 
 func init() {
@@ -36,6 +37,7 @@ func init() {
 	c.Flags().BoolVar(&runLocal, "local", false, "skip Jira: take ticket text from --title/--desc (for testing)")
 	c.Flags().StringVar(&runTitle, "title", "", "ticket summary (requires --local)")
 	c.Flags().StringVar(&runDesc, "desc", "", "ticket description (with --local)")
+	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
 	rootCmd.AddCommand(c)
 }
 
@@ -219,7 +221,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
-		Repo: repo, Cfg: cfg, DryRun: runDryRun,
+		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume,
 		Store: st,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in
