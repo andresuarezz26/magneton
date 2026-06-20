@@ -56,7 +56,7 @@ func launchHub() error {
 
 	m := monitorModel{store: st, jira: jc, selfPath: self}
 	m.reload()
-	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
 
@@ -297,8 +297,6 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		return m, nil
-	case tea.MouseMsg:
-		return m.handleMouse(msg)
 	case tea.KeyMsg:
 		return m.dispatchKey(msg)
 	}
@@ -347,7 +345,9 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.doAction("studio")
 	case "c":
 		return m.doAction("claude")
-	case "enter", "a":
+	case "enter":
+		return m.doAction("menu") // show the action menu for the selected agent
+	case "a":
 		return m.doAction("answer")
 	case "x":
 		return m.doAction("stop")
@@ -519,8 +519,16 @@ func (m monitorModel) View() string {
 	} else if m.notice != "" {
 		notice = whyStyle.Render(truncate("  "+m.notice, w))
 	}
-	bar, _ := m.renderActionBar()
-	return m.frame(b.String(), body, notice, bar, w)
+	// Footer hint. Modal views render their own hints in the body.
+	footer := ""
+	if m.view == viewDashboard && !m.answering && m.confirming == "" {
+		footer = dimStyle.Render("  ↑↓ select · enter: actions · n: run new · : commands · q: quit")
+	} else if m.confirming != "" {
+		footer = dimStyle.Render("  y: yes · n: no")
+	} else if m.answering {
+		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
+	}
+	return m.frame(b.String(), body, notice, footer, w)
 }
 
 // renderDashboardBody renders the triaged agent list + detail pane (no footer).

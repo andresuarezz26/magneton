@@ -6,19 +6,18 @@ import (
 	"github.com/andresuarezz26/magneton/internal/store"
 )
 
-func actionIDs(btns []actionBtn) map[string]bool {
+func itemIDs(items []paletteItem) map[string]bool {
 	m := map[string]bool{}
-	for _, b := range btns {
-		m[b.id] = true
+	for _, it := range items {
+		m[it.key] = true
 	}
 	return m
 }
 
-func TestCurrentActionsContextual(t *testing.T) {
-	// awaiting-answer → Answer is the primary CTA.
-	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}}
-	ids := actionIDs(m.currentActions())
-	for _, want := range []string{"answer", "studio", "claude", "stop", "run", "menu", "quit"} {
+func TestAgentActionsContextual(t *testing.T) {
+	// awaiting-answer → Answer offered, not Resume.
+	ids := itemIDs(agentActions(store.Session{Ticket: "K1", State: "awaiting-answer"}))
+	for _, want := range []string{"answer", "studio", "claude", "stop"} {
 		if !ids[want] {
 			t.Errorf("awaiting: missing action %q", want)
 		}
@@ -27,48 +26,40 @@ func TestCurrentActionsContextual(t *testing.T) {
 		t.Error("awaiting should not offer resume")
 	}
 
-	// failed → Resume is offered.
-	m = monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}}
-	if !actionIDs(m.currentActions())["resume"] {
+	// failed → Resume offered.
+	if !itemIDs(agentActions(store.Session{State: "failed"}))["resume"] {
 		t.Error("failed should offer resume")
 	}
 
 	// review (terminal) → no Stop.
-	m = monitorModel{flat: []store.Session{{Ticket: "K1", State: "review"}}}
-	if actionIDs(m.currentActions())["stop"] {
+	if itemIDs(agentActions(store.Session{State: "review"}))["stop"] {
 		t.Error("review (terminal) should not offer stop")
 	}
+}
 
-	// confirming → Yes/No.
-	m = monitorModel{confirming: "K1"}
-	ids = actionIDs(m.currentActions())
-	if !ids["confirm-yes"] || !ids["confirm-no"] {
-		t.Errorf("confirming should offer yes/no, got %v", ids)
+func TestPaletteItemsIncludeGlobals(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir()) // no pidfile → daemon stopped
+	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}}
+	ids := itemIDs(m.paletteItems())
+	for _, want := range []string{"answer", "run", "doctor", "config", "setup", "daemon-start", "quit"} {
+		if !ids[want] {
+			t.Errorf("menu missing %q", want)
+		}
+	}
+	if ids["daemon-stop"] {
+		t.Error("daemon stopped should not offer daemon-stop")
 	}
 }
 
 func TestDoActionTransitions(t *testing.T) {
-	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunInput {
-		t.Error("run → run-input view")
-	}
 	if mm, _ := (monitorModel{}).doAction("menu"); mm.(monitorModel).view != viewPalette {
 		t.Error("menu → palette view")
+	}
+	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunInput {
+		t.Error("run → run-input view")
 	}
 	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}}
 	if mm, _ := m.doAction("stop"); mm.(monitorModel).confirming != "K1" {
 		t.Error("stop → confirming set to the selected ticket")
-	}
-}
-
-func TestRenderActionBarHitboxesOrdered(t *testing.T) {
-	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}}
-	_, boxes := m.renderActionBar()
-	if len(boxes) < 3 {
-		t.Fatalf("expected several buttons, got %d", len(boxes))
-	}
-	for i := 1; i < len(boxes); i++ {
-		if boxes[i].x0 <= boxes[i-1].x1 {
-			t.Errorf("hitboxes overlap or out of order: %+v then %+v", boxes[i-1], boxes[i])
-		}
 	}
 }

@@ -29,40 +29,16 @@ func TestConfigFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPaletteItemsDaemonStopped(t *testing.T) {
-	t.Setenv("MAGNETON_HOME", t.TempDir()) // no pidfile → daemon not alive
+func TestMenuQuitIsLast(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
 	items := monitorModel{}.paletteItems()
-	keys := make([]string, len(items))
-	for i, it := range items {
-		keys[i] = it.key
-	}
-	has := func(k string) bool {
-		for _, x := range keys {
-			if x == k {
-				return true
-			}
-		}
-		return false
-	}
-	if !has("run") || !has("doctor") || !has("config") || !has("setup") {
-		t.Errorf("missing core commands: %v", keys)
-	}
-	if !has("start") || has("stop") {
-		t.Errorf("daemon stopped should offer Start, not Stop: %v", keys)
-	}
-	if keys[len(keys)-1] != "quit" {
-		t.Errorf("Quit should be last: %v", keys)
+	if items[len(items)-1].key != "quit" {
+		t.Errorf("Quit should be last in the menu, got %q", items[len(items)-1].key)
 	}
 }
 
-func TestRunPaletteItemTransitions(t *testing.T) {
-	// "run" → run-input view.
-	mm, _ := monitorModel{}.runPaletteItem("run")
-	if mm.(monitorModel).view != viewRunInput {
-		t.Error("run should open the run-input view")
-	}
-
-	// "config" with a saved config → form view with a non-nil form.
+func TestConfigActionOpensForm(t *testing.T) {
+	// doAction("config") with a saved config → form view with a non-nil 9-field form.
 	t.Setenv("MAGNETON_HOME", t.TempDir())
 	if err := paths.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -70,7 +46,7 @@ func TestRunPaletteItemTransitions(t *testing.T) {
 	if err := config.Save(&config.Config{JiraBaseURL: "u", Concurrency: 3}); err != nil {
 		t.Fatal(err)
 	}
-	mm, _ = monitorModel{}.runPaletteItem("config")
+	mm, _ := monitorModel{}.doAction("config")
 	hub := mm.(monitorModel)
 	if hub.view != viewForm || hub.form == nil {
 		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)

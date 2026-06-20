@@ -48,18 +48,23 @@ type paletteItem struct {
 	desc  string
 }
 
-// paletteItems is rebuilt each open so the daemon entry reflects current state.
+// paletteItems is the Enter menu: the selected agent's actions first, then the
+// global commands. Rebuilt each open so it reflects the current selection/daemon.
 func (m monitorModel) paletteItems() []paletteItem {
-	items := []paletteItem{
-		{"run", "Run new ticket…", "launch a ticket key or .md file"},
-		{"doctor", "Doctor", "connectivity + setup health check"},
-		{"config", "Edit config", "edit ~/.agent/config.toml fields"},
-		{"setup", "Setup wizard", "configure Jira, repo, and tokens"},
+	var items []paletteItem
+	if s := m.selected(); s != nil {
+		items = append(items, agentActions(*s)...)
 	}
+	items = append(items,
+		paletteItem{"run", "Run new ticket…", "launch a ticket key or .md file"},
+		paletteItem{"doctor", "Doctor", "connectivity + setup health check"},
+		paletteItem{"config", "Edit config", "edit ~/.agent/config.toml fields"},
+		paletteItem{"setup", "Setup wizard", "configure Jira, repo, and tokens"},
+	)
 	if _, ok := daemonAlive(); ok {
-		items = append(items, paletteItem{"stop", "Stop daemon", "stop the background poller"})
+		items = append(items, paletteItem{"daemon-stop", "Stop daemon", "stop the background poller"})
 	} else {
-		items = append(items, paletteItem{"start", "Start daemon", "poll Jira and run the fleet in the background"})
+		items = append(items, paletteItem{"daemon-start", "Start daemon", "poll Jira and run the fleet in the background"})
 	}
 	return append(items, paletteItem{"quit", "Quit", "exit the hub"})
 }
@@ -67,7 +72,7 @@ func (m monitorModel) paletteItems() []paletteItem {
 func (m monitorModel) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	items := m.paletteItems()
 	switch msg.String() {
-	case "esc", ":", "q":
+	case "esc", "q":
 		m.view = viewDashboard
 	case "up", "k":
 		if m.paletteCursor > 0 {
@@ -81,48 +86,31 @@ func (m monitorModel) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "enter":
 		if m.paletteCursor < len(items) {
-			return m.runPaletteItem(items[m.paletteCursor].key)
+			id := items[m.paletteCursor].key
+			m.view = viewDashboard // close the menu; doAction may reopen another view
+			return m.doAction(id)
 		}
-	}
-	return m, nil
-}
-
-func (m monitorModel) runPaletteItem(key string) (tea.Model, tea.Cmd) {
-	m.view = viewDashboard
-	switch key {
-	case "run":
-		m.view = viewRunInput
-		m.runText = ""
-	case "doctor":
-		m.notice = "running doctor…"
-		return m, m.runDoctor()
-	case "config":
-		m.openConfigForm()
-	case "setup":
-		m.openSetupForm()
-	case "start":
-		m.notice = "starting daemon…"
-		return m, m.startDaemon()
-	case "stop":
-		m.notice = "stopping daemon…"
-		return m, m.stopDaemon()
-	case "quit":
-		return m, tea.Quit
 	}
 	return m, nil
 }
 
 func (m monitorModel) renderPalette(w int) string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("  Commands") + "\n\n")
-	for i, it := range m.paletteItems() {
-		line := fmt.Sprintf("  %-16s %s", it.label, dimStyle.Render(it.desc))
-		if i == m.paletteCursor {
-			line = selStyle.Render(fmt.Sprintf("  %-16s ", it.label)) + dimStyle.Render(it.desc)
-		}
-		b.WriteString(truncate(line, w) + "\n")
+	title := "Actions"
+	if s := m.selected(); s != nil {
+		title = "Actions — " + s.Ticket
 	}
-	b.WriteString("\n  " + dimStyle.Render("↑↓ select · enter run · esc close"))
+	b.WriteString(headerStyle.Render("  "+title) + "\n\n")
+	for i, it := range m.paletteItems() {
+		marker := "   "
+		label := it.label
+		if i == m.paletteCursor {
+			marker = " ▸ "
+			label = selStyle.Render(" " + it.label + " ")
+		}
+		b.WriteString(truncate(marker+label+"  "+dimStyle.Render(it.desc), w) + "\n")
+	}
+	b.WriteString("\n  " + dimStyle.Render("↑↓ select · enter: choose · esc: close"))
 	return b.String()
 }
 
