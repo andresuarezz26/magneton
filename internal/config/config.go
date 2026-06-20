@@ -41,6 +41,17 @@ type Config struct {
 	Repos                []Repo  `toml:"repo"`
 }
 
+// Save writes the config to ~/.agent/config.toml (0600), creating/truncating it.
+// Same encoding the init wizard uses; reusable by the TUI config/setup forms.
+func Save(c *Config) error {
+	f, err := os.OpenFile(paths.Config(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(c)
+}
+
 // Load reads and validates the config, applying defaults.
 func Load() (*Config, error) {
 	b, err := os.ReadFile(paths.Config())

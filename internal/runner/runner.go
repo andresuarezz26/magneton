@@ -6,6 +6,8 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -28,15 +30,16 @@ type Task struct {
 	Repo        *config.Repo
 	Cfg         *config.Config
 	DryRun      bool
+	Resume      bool         // verify & ship: continue from the existing worktree, no re-plan/implement
 	Store       *store.Store // optional; enables emulator coordination
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
 type Hooks struct {
-	Logf    func(string, ...interface{})     // progress lines
-	OnState func(state string, retries int)  // lifecycle transitions
+	Logf    func(string, ...interface{})      // progress lines
+	OnState func(state string, retries int)   // lifecycle transitions
 	OnField func(branch, worktree, pr string) // metadata as it's known
-	Comment func(text string)                // post back to the ticket
+	Comment func(text string)                 // post back to the ticket
 }
 
 // Outcome is the terminal result.
@@ -49,6 +52,9 @@ type Outcome struct {
 // Run executes the full staged pipeline for one ticket:
 // PLAN → CLARIFY → IMPLEMENT → SELF-REVIEW → GATE → PR
 func Run(t Task, h Hooks) Outcome {
+	if t.Resume {
+		return resumeShip(t, h)
+	}
 	logf := h.Logf
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
@@ -287,7 +293,17 @@ func Run(t Task, h Hooks) Outcome {
 		}
 	}
 
-	// 7. Commit anything left uncommitted.
+	// 7-9. Commit, push, open PR (shared with the resume path).
+	return finishShip(t, h, worktree, branch, attempts, report, logf, setState)
+}
+
+// finishShip commits any pending changes, and (unless dry-run) pushes the branch
+// and opens a PR. Shared by the full pipeline and the resume path. report may be
+// nil (resume has no fresh report.json).
+func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *agent.Report,
+	logf func(string, ...interface{}), setState func(string, int)) Outcome {
+	repo := t.Repo
+
 	if git.HasChanges(worktree) {
 		if err := git.CommitAll(worktree, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary)); err != nil {
 			setState(store.StateFailed, attempts-1)
@@ -301,7 +317,6 @@ func Run(t Task, h Hooks) Outcome {
 		return Outcome{State: store.StateReview}
 	}
 
-	// 8. Push + open PR (human-gated; never auto-merge).
 	base := repo.Base
 	if base == "" {
 		base = git.DefaultBranch(repo.Path)
@@ -313,9 +328,13 @@ func Run(t Task, h Hooks) Outcome {
 		return Outcome{State: store.StateFailed, Err: fmt.Errorf("push: %w", err)}
 	}
 
+	var files []string
+	if report != nil {
+		files = report.FilesChanged
+	}
 	pr := vcs.PRData{
 		Ticket: t.Ticket, Summary: t.Summary, Branch: branch, Base: base,
-		FilesChanged: report.FilesChanged, Tests: "✅ compile + unit tests",
+		FilesChanged: files, Tests: "✅ compile + tests",
 		Attempts: attempts, JiraBaseURL: t.Cfg.JiraBaseURL,
 	}
 	body, err := vcs.RenderPRBody(pr)
@@ -332,7 +351,6 @@ func Run(t Task, h Hooks) Outcome {
 		h.OnField("", "", prURL)
 	}
 
-	// 9. Report back on the ticket.
 	if h.Comment != nil {
 		pr.PRURL = prURL
 		if c, err := vcs.RenderJiraComment(pr); err == nil {
@@ -341,6 +359,112 @@ func Run(t Task, h Hooks) Outcome {
 	}
 	logf("[%s] review — human-gated. magneton stops here.", t.Ticket)
 	return Outcome{State: store.StateReview, PRURL: prURL}
+}
+
+// worktreeReady reports whether dir is a usable git worktree (has its .git link).
+func worktreeReady(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// resumeShip continues a ticket from its EXISTING worktree, preserving manual
+// changes: it re-runs the gate once and, if green, commits + pushes + opens a PR.
+// It never re-plans or lets the agent edit the code ("verify & ship").
+func resumeShip(t Task, h Hooks) Outcome {
+	logf := h.Logf
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
+	setState := func(s string, r int) {
+		if h.OnState != nil {
+			h.OnState(s, r)
+		}
+	}
+	repo := t.Repo
+	branch := strings.NewReplacer(
+		"{ticket}", strings.ToLower(t.Ticket),
+		"{slug}", slugify(t.Summary),
+	).Replace(repo.Branch)
+	worktree := paths.WorktreeFor(t.Ticket)
+	gradleHome := paths.GradleHomeFor(t.Ticket)
+
+	if !worktreeReady(worktree) {
+		setState(store.StateFailed, 0)
+		return Outcome{State: store.StateFailed,
+			Err: fmt.Errorf("resume: no worktree at %s — run without --resume to start fresh", worktree)}
+	}
+	if h.OnField != nil {
+		h.OnField(branch, worktree, "")
+	}
+	logf("[%s] resume: verifying your changes in %s on %s", t.Ticket, worktree, branch)
+
+	// Reuse the preserved plan/report if present (for test commands + emulator).
+	plan, _ := agent.ReadPlan(worktree)
+	report, _ := agent.ReadReport(worktree)
+
+	compileCmd := repo.Compile
+	if compileCmd == "" && plan != nil {
+		compileCmd = plan.CompileCmd
+	}
+	testCmd := repo.Test
+	if testCmd == "" && plan != nil {
+		testCmd = plan.TestCmd
+	}
+	needsEmu := plan != nil && plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
+
+	// Boot + acquire the emulator only if the original plan needed instrumented tests.
+	if needsEmu {
+		sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		ready := make(chan error, 1)
+		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, ready)
+		logf("[%s] waiting for emulator…", t.Ticket)
+		if err := <-ready; err != nil {
+			logf("[%s] (warn) emulator unavailable: %v — falling back to unit tests", t.Ticket, err)
+			needsEmu = false
+		} else {
+			for {
+				if ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket); ok {
+					break
+				}
+				logf("[%s] emulator busy, waiting…", t.Ticket)
+				time.Sleep(5 * time.Second)
+			}
+			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+		}
+	}
+	activeTestCmd := testCmd
+	if needsEmu && repo.ConnectedTest != "" {
+		activeTestCmd = repo.ConnectedTest
+	}
+	logf("[%s] gate (resume): compile=%q test=%q emulator=%v", t.Ticket, compileCmd, activeTestCmd, needsEmu)
+
+	// Single gate pass — the human already fixed it; the agent does not retry.
+	setState(store.StateBuilding, 0)
+	if r := build.Step(worktree, gradleHome, compileCmd, "compile"); !r.OK {
+		return resumeNeedsYou(t, h, setState, logf, worktree, r)
+	}
+	setState(store.StateTesting, 0)
+	if r := build.Step(worktree, gradleHome, activeTestCmd, "test"); !r.OK {
+		return resumeNeedsYou(t, h, setState, logf, worktree, r)
+	}
+	logf("[%s] gate green ✓", t.Ticket)
+
+	return finishShip(t, h, worktree, branch, 1, report, logf, setState)
+}
+
+// resumeNeedsYou handles a gate failure during resume: it stops at needs-you and
+// asks the human to fix the worktree again (no automatic agent retry).
+func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(string, ...interface{}),
+	worktree string, r build.Result) Outcome {
+	logf("[%s] needs-you: %s still red after your changes", t.Ticket, r.Phase)
+	setState(store.StateNeedsYou, 0)
+	if h.Comment != nil {
+		h.Comment(fmt.Sprintf(
+			"🤖 *magneton [%s] — still red after resume*\n\nThe *%s* step failed on your changes.\n\n*Last error (tail):*\n{code}\n%s\n{code}\n\nFix in the worktree and resume again:\n`open -a \"Android Studio\" %s`",
+			t.Ticket, r.Phase, tail(r.Output, 1500), worktree))
+	}
+	return Outcome{State: store.StateNeedsYou}
 }
 
 // bootOrWait either reuses an already-running emulator, starts a new one, or

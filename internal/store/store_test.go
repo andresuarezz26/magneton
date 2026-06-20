@@ -69,3 +69,25 @@ func TestStateAndList(t *testing.T) {
 		t.Fatalf("list = %v (err %v), want 1", list, err)
 	}
 }
+
+func TestSetPIDRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := s.Claim("PROJ-9", "/repo", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPID("PROJ-9", 4242); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("PROJ-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PID != 4242 {
+		t.Errorf("PID = %d, want 4242", got.PID)
+	}
+}

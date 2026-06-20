@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -109,15 +108,9 @@ func wizard() error {
 	}
 
 	// Write config.
-	f, err := os.OpenFile(cfgPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := config.Save(&cfg); err != nil {
 		return err
 	}
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		f.Close()
-		return err
-	}
-	f.Close()
 	fmt.Printf("\n✓ wrote %s\n", cfgPath)
 
 	// Connectivity check (Decision 13).

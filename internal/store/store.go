@@ -27,6 +27,9 @@ const (
 	// Terminal post-review states set when the PR is resolved (Decision 7 cleanup).
 	StateMerged = "merged"
 	StateClosed = "closed"
+	// StateStopped is set when a session is manually cancelled from the monitor
+	// (process killed + worktree removed).
+	StateStopped = "stopped"
 )
 
 // Emulator lifecycle states.
@@ -48,6 +51,7 @@ type Session struct {
 	PRURL     string
 	Summary   string
 	SessionID string // Claude session ID for cross-stage resume
+	PID       int    // OS pid of the process driving this session (0 = unknown)
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -66,6 +70,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   pr_url     TEXT NOT NULL DEFAULT '',
   summary    TEXT NOT NULL DEFAULT '',
   session_id TEXT NOT NULL DEFAULT '',
+  pid        INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -88,8 +93,9 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// Migrate: add session_id column to existing DBs (ignore "duplicate column" error).
+	// Migrate existing DBs (ignore "duplicate column" errors on re-run).
 	db.Exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE sessions ADD COLUMN pid INTEGER NOT NULL DEFAULT 0`)
 	return &Store{db: db}, nil
 }
 
@@ -130,6 +136,13 @@ func (s *Store) SetSessionID(ticket, sessionID string) error {
 	return err
 }
 
+// SetPID records the OS pid of the process driving this session, so the monitor
+// can tell a live agent from a dead one (deterministic liveness via kill -0).
+func (s *Store) SetPID(ticket string, pid int) error {
+	_, err := s.db.Exec(`UPDATE sessions SET pid=? WHERE ticket=?`, pid, ticket)
+	return err
+}
+
 // SetFields updates branch/worktree/pr_url (any empty string is left unchanged).
 func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 	_, err := s.db.Exec(
@@ -147,7 +160,7 @@ func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 // Get returns one session.
 func (s *Store) Get(ticket string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, created_at, updated_at
 		 FROM sessions WHERE ticket=?`, ticket)
 	return scan(row)
 }
@@ -155,7 +168,7 @@ func (s *Store) Get(ticket string) (*Session, error) {
 // List returns all sessions, most recently updated first.
 func (s *Store) List() ([]Session, error) {
 	rows, err := s.db.Query(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, created_at, updated_at
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -255,7 +268,7 @@ func scan(r scanner) (*Session, error) {
 	var s Session
 	var created, updated int64
 	if err := r.Scan(&s.Ticket, &s.Repo, &s.State, &s.Retries, &s.Branch,
-		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &created, &updated); err != nil {
+		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &created, &updated); err != nil {
 		return nil, err
 	}
 	s.CreatedAt = time.Unix(created, 0)

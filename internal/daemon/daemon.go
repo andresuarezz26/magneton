@@ -41,8 +41,8 @@ func Run(ctx context.Context, cfg *config.Config, once bool) error {
 	logf("daemon started · concurrency %d · poll %ds", cfg.Concurrency, cfg.PollInterval)
 
 	poll := func() {
-		cleanupResolved(st)              // reclaim worktrees for merged/closed PRs (Decision 7)
-		idleShutdownEmulators(st, cfg)   // kill emulators idle past the timeout
+		cleanupResolved(st)            // reclaim worktrees for merged/closed PRs (Decision 7)
+		idleShutdownEmulators(st, cfg) // kill emulators idle past the timeout
 		for i := range cfg.Repos {
 			repo := &cfg.Repos[i]
 			if repo.JQL == "" {
@@ -141,6 +141,7 @@ func process(issue jira.Issue, repo *config.Repo, cfg *config.Config, st *store.
 	ticket := issue.Key
 	tlog := ticketLogger(ticket)
 	tlog("[%s] %s", ticket, issue.Summary)
+	_ = st.SetPID(ticket, os.Getpid()) // for monitor liveness (kill -0)
 
 	out := runner.Run(runner.Task{
 		Ticket: ticket, Summary: issue.Summary, Description: issue.Description,

@@ -1,6 +1,6 @@
 # Binaries
 /agent
-/droidpilot
+/magneton
 *.exe
 
 # Go

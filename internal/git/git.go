@@ -45,10 +45,11 @@ func CreateWorktree(repo, worktreeDir, branch, base string) error {
 		return err
 	}
 	_, _ = run(repo, "worktree", "remove", "--force", worktreeDir) // ignore if absent
+	_, _ = run(repo, "worktree", "prune")                          // drop stale admin entries (re-run safety)
 	if _, err := run(repo, "worktree", "add", "-b", branch, worktreeDir, "origin/"+base); err != nil {
 		// Branch may already exist (re-run): attach the existing branch.
 		if _, err2 := run(repo, "worktree", "add", worktreeDir, branch); err2 != nil {
-			return err
+			return err2
 		}
 	}
 	return nil

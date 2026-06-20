@@ -118,6 +118,27 @@ func (c *Client) AddComment(key, body string) error {
 	return nil
 }
 
+// SetDescription overwrites a ticket's description (plain text, api/2). Used by
+// `agent monitor` to write answers back so a re-run picks them up.
+func (c *Client) SetDescription(key, description string) error {
+	u := fmt.Sprintf("%s/rest/api/2/issue/%s", c.BaseURL, url.PathEscape(key))
+	payload, _ := json.Marshal(map[string]any{
+		"fields": map[string]any{"description": description},
+	})
+	req, _ := http.NewRequest(http.MethodPut, u, strings.NewReader(string(payload)))
+	c.auth(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("jira update %s: HTTP %d: %s", key, resp.StatusCode, truncate(string(b), 200))
+	}
+	return nil
+}
+
 // TransitionTo moves a ticket to the first available transition whose
 // destination status name matches targetStatus (case-insensitive).
 func (c *Client) TransitionTo(key, targetStatus string) error {

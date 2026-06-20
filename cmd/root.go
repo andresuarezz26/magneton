@@ -16,6 +16,9 @@ var rootCmd = &cobra.Command{
 	Version:       version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Bare `agent` (no subcommand) opens the TUI hub. Subcommands still work.
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error { return launchHub() },
 }
 
 // Execute runs the root command.

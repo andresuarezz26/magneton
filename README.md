@@ -1,21 +1,28 @@
 # magneton
 
-**Android development workflow automation.** A local CLI that takes a Jira ticket
-and drives the full Android development cycle autonomously: it provisions an
-isolated git worktree, drives a headless [Claude Code](https://claude.com/claude-code)
-session to plan and implement the change, manages Android emulators when the task
-needs instrumented tests, gates the result on a Gradle compile + test run, and opens
-a PR for a human to review and merge. It never auto-merges.
+**Android development workflow automation.** magneton turns Android tickets into
+reviewed PRs autonomously, and its home is a **terminal dashboard (TUI)**: run
+`agent` with no arguments and you get a live view of every agent plus one-key
+actions to start, watch, unblock, and ship work — without leaving the screen.
 
-It handles the whole loop — not just "write code" — including keeping you in the
-loop when it gets stuck, moving Jira tickets through their status workflow, and
-coordinating emulator resources across concurrent tasks.
+Under the hood, for each ticket it provisions an isolated git worktree, drives a
+headless [Claude Code](https://claude.com/claude-code) session to plan and
+implement the change, manages Android emulators when the task needs instrumented
+tests, gates the result on a Gradle compile + test run, and opens a PR for a human
+to review and merge. **It never auto-merges.** It handles the whole loop — not
+just "write code" — including keeping you in the loop when it gets stuck, moving
+Jira tickets through their status workflow, and coordinating emulator resources
+across concurrent tasks.
+
+The TUI is the friendly front; every action is also a plain subcommand
+(`agent run`, `agent doctor`, …) for scripts and CI.
 
 ## Status
 
 - **Phase 1 — complete:** `agent run <TICKET>` — the thin end-to-end loop, including bounded self-correct retries.
 - **Phase 2 — complete:** background daemon (`agent start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `agent status` (+ `--watch`), Jira JQL polling, Jira status transitions, desktop notifications.
 - **Phase 3 — complete:** interactive `agent init` wizard with connectivity check, `--version`, GoReleaser + Homebrew packaging.
+- **TUI hub — complete:** bare `agent` opens a live dashboard that is the home base for everything — start/answer/resume/stop agents, open the worktree in Android Studio or resume the session in Claude Code, run doctor, edit config, and control the daemon, all from one screen.
 
 ## How it works
 
@@ -131,11 +138,13 @@ publishes the Homebrew formula.
 
 ## Setup
 
-Run **`agent init`**. On a terminal it launches an interactive wizard (prompts
+Run **`agent`** (the hub) and pick **Setup wizard** from the menu (`:`), or run
+**`agent init`** directly. On a terminal it launches an interactive wizard (prompts
 for Jira URL/email, repo path, build/test commands, and tokens — stored in the
 OS keychain — then runs a connectivity check against Jira, git, `claude`, and
 `gh`). When stdin isn't a TTY (CI), it scaffolds a commented `~/.agent/config.toml`
-to edit by hand.
+to edit by hand. Once configured, just run **`agent`** and start a ticket from the
+dashboard.
 
 To **edit the config** later:
 ```bash
@@ -256,13 +265,55 @@ android_sdk_path = "~/Library/Android/sdk"
 
 ## Usage
 
+### The hub (the default — TUI-first)
+
+Run **`agent`** with no arguments and you land in the hub: a live dashboard that is
+the home base for everything. (`agent monitor`/`agent top` open the same screen.)
+
+```
+magneton · 6 agents · 2 need you      20:49:28  ·  ● daemon pid 41021
+
+   ＋ Start new ticket(s)          ← first row; press enter to start
+
+ ▾ NEEDS YOU (2)
+   ▮ KAN-6   awaiting-answer  Improve content discovery…        5m
+   ✗ KAN-4   failed           Create integration tests…         7m
+ ▾ RUNNING (1)
+   ● KAN-7   working          Add a logout button              12s
+ ▾ DONE (1)
+   ✓ KAN-5   review           Mock use case for home            7d
+
+ ↑↓ select · enter: choose · : commands · q: quit
+```
+
+- **Triage at a glance** — agents grouped **NEEDS YOU / STOPPED / RUNNING / DONE**,
+  with live state, the ticket title, and age. STOPPED is detected from the real
+  process (a dead pid), not a guess.
+- **Start work** — the top row is *Start new ticket(s)*; press enter and type one
+  or more Jira keys or `.md` paths to launch them (in parallel).
+- **Act on an agent** — select it, press enter, and pick from its menu:
+  - **Answer the questions** — type your answer; it's written back and the agent resumes.
+  - **Resume (verify & ship)** — after you fix the worktree by hand, re-run the gate on your changes and open the PR.
+  - **Open Android Studio** — open the worktree as a project.
+  - **Open in Claude Code** — a new terminal resumes the agent's own Claude session in the worktree.
+  - **Stop & clean up** — kill the process and remove the worktree.
+- **Everything else** — the same menu (or `:`) reaches **Doctor**, **Edit config**,
+  the **Setup wizard**, and **Start/Stop daemon**. The header shows daemon status live.
+
+Every action maps to a subcommand, so the same work is scriptable for CI:
+
 ```bash
 agent init                     # scaffold config + run connectivity check
 agent doctor                   # check config path + connectivity (no prompts)
 
-agent run PROJ-123             # run one ticket end-to-end
+agent run PROJ-123             # run one Jira ticket end-to-end
 agent run PROJ-123 --dry-run   # everything except push + PR (safe first run)
+agent run PROJ-123 --resume    # after a manual fix: re-gate the existing worktree, then PR
 agent logs PROJ-123            # print the session log
+
+# No Jira required — point it at local markdown files:
+agent run ticket.md                        # one local ticket, no Jira
+agent run feat-a.md feat-b.md feat-c.md    # several at once, in parallel
 
 # Unattended fleet:
 agent start                    # poll Jira and run sessions (foreground)
@@ -271,6 +322,31 @@ agent status                   # aligned table of every session
 agent status --watch           # live-refreshing view
 agent stop                     # graceful shutdown (drains in-flight sessions)
 ```
+
+### Local files instead of Jira
+
+You don't need Jira to use magneton. Pass one or more file paths to `agent run`
+and each is treated as a ticket:
+
+```bash
+agent run ./tickets/add-logout-button.md ./tickets/fix-crash.md
+```
+
+- **Title + body.** The first markdown `# H1` is the ticket summary (or the first
+  non-blank line if there's no H1); everything after it is the description handed
+  to the agent.
+- **Ticket id.** Derived from the filename: `add-logout-button.md` → `ADD-LOGOUT-BUTTON`,
+  used for the worktree, branch, log file, and `agent status`. Same-basename files
+  in one run are disambiguated with a `-2`/`-3` suffix.
+- **Parallelism.** Multiple args run concurrently, capped at `concurrency` from your
+  config (default 3). Each ticket gets its own worktree, branch, and `<id>.log`;
+  terminal lines are prefixed `[<id>]`. If one fails, the others still run and the
+  command exits non-zero.
+- **Plan + questions.** With no Jira to comment on, the agent's plan and any blocking
+  questions print to the terminal and the per-ticket log instead. Answer by editing
+  the `.md` and re-running (same stop-and-re-run flow as Jira).
+
+You can also mix Jira keys and files in one invocation: `agent run PROJ-1 todo.md`.
 
 ### The plan + questions workflow
 
@@ -287,15 +363,25 @@ reply in comments — magneton reads the description). Then re-run the command s
 
 ### When the agent gets stuck
 
-If the build gate fails after all retries, magneton comments on the Jira ticket
-with the error details and the worktree path so you can investigate:
+If the build gate fails after all retries (state `needs-you`/`failed`), magneton
+comments on the Jira ticket with the error details and the worktree path so you
+can investigate:
 
 ```bash
 open -a "Android Studio" ~/.agent/worktrees/PROJ-123
 ```
 
-Fix the issue in the worktree or update the ticket description, then re-run
-`agent run PROJ-123`.
+**Fix it by hand, then resume** — magneton keeps *your* changes, re-runs the gate
+on them, and (if green) commits + opens the PR. It does **not** re-plan or let the
+agent touch your fix:
+
+```bash
+agent run PROJ-123 --resume
+```
+
+(In the TUI: select the ticket, `o` to open the worktree, fix it, then `R` to
+resume.) A plain `agent run PROJ-123` (no `--resume`) starts over from scratch and
+**discards** uncommitted worktree changes — use `--resume` to keep a manual fix.
 
 ### Safety rails
 
