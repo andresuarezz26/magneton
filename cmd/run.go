@@ -217,11 +217,22 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 		hooks.Comment = localPlanComment(logf, sp.ticket)
 	}
 
-	return runner.Run(runner.Task{
+	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun,
 		Store: st,
 	}, hooks)
+	// Record the terminal outcome in the ticket log so the reason is visible in
+	// the TUI/`agent logs` even when stdout/stderr is discarded (TUI-launched).
+	switch {
+	case out.Err != nil:
+		logf("[%s] ✗ %s: %v", sp.ticket, out.State, out.Err)
+	case out.State == store.StateReview:
+		logf("[%s] ✓ review — PR ready: %s", sp.ticket, out.PRURL)
+	default:
+		logf("[%s] ended in state: %s", sp.ticket, out.State)
+	}
+	return out
 }
 
 // localPlanComment routes runner Comment text (the rendered plan and blocking
