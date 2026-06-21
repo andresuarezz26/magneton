@@ -44,13 +44,18 @@ func CreateWorktree(repo, worktreeDir, branch, base string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0o755); err != nil {
 		return err
 	}
-	_, _ = run(repo, "worktree", "remove", "--force", worktreeDir) // ignore if absent
-	_, _ = run(repo, "worktree", "prune")                          // drop stale admin entries (re-run safety)
-	if _, err := run(repo, "worktree", "add", "-b", branch, worktreeDir, "origin/"+base); err != nil {
-		// Branch may already exist (re-run): attach the existing branch.
-		if _, err2 := run(repo, "worktree", "add", worktreeDir, branch); err2 != nil {
-			return err2
-		}
+	_, _ = run(repo, "worktree", "remove", "--force", worktreeDir) // de-register if registered
+	_, _ = run(repo, "worktree", "prune")                          // drop stale admin entries
+	// Nuke any leftover directory still occupying the path (e.g. a stale .idea/
+	// left by opening the worktree in an IDE). git refuses to add a worktree onto
+	// a non-empty dir, and `worktree remove` can't clear an unregistered one.
+	if err := os.RemoveAll(worktreeDir); err != nil {
+		return fmt.Errorf("clear stale worktree dir: %w", err)
+	}
+	// -B creates the branch, or RESETS it to origin/<base> if it already exists,
+	// so a re-run starts clean whether or not the branch lingers from a prior run.
+	if _, err := run(repo, "worktree", "add", "-B", branch, worktreeDir, "origin/"+base); err != nil {
+		return err
 	}
 	return nil
 }
