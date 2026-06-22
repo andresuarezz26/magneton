@@ -186,6 +186,14 @@ func Run(t Task, h Hooks) Outcome {
 	if runErr != nil {
 		logf("[%s] (warn) implement stage exited: %v", t.Ticket, runErr)
 	}
+	// Persist the Claude session id so "Open in Claude Code" can `claude --resume`
+	// straight back into the agent's conversation for this ticket.
+	saveSession := func(id string) {
+		if t.Store != nil && id != "" {
+			_ = t.Store.SetSessionID(t.Ticket, id)
+		}
+	}
+	saveSession(sessionID)
 
 	report, err := agent.ReadReport(worktree)
 	if err != nil {
@@ -226,6 +234,7 @@ func Run(t Task, h Hooks) Outcome {
 			logf("[%s] (warn) fix round exited: %v", t.Ticket, ferr)
 		} else if sid != "" {
 			sessionID = sid
+			saveSession(sessionID)
 		}
 	} else {
 		logf("[%s] self-review: pass ✓", t.Ticket)
@@ -290,6 +299,7 @@ func Run(t Task, h Hooks) Outcome {
 			logf("[%s] (warn) claude retry exited: %v", t.Ticket, err)
 		} else if sid != "" {
 			sessionID = sid
+			saveSession(sessionID)
 		}
 	}
 
