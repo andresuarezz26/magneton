@@ -91,3 +91,24 @@ func TestSetPIDRoundTrip(t *testing.T) {
 		t.Errorf("PID = %d, want 4242", got.PID)
 	}
 }
+
+func TestSetSessionIDRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Claim("PROJ-7", "/repo", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionID("PROJ-7", "sess-abc-123"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("PROJ-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionID != "sess-abc-123" {
+		t.Errorf("SessionID = %q, want sess-abc-123", got.SessionID)
+	}
+}
