@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,21 +17,41 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// agentActions returns the contextual menu items for one agent (shown when the
-// user presses Enter on it). Global commands are appended by paletteItems.
+// worktreeExists reports whether the ticket still has a usable git worktree.
+// "Stop & clean up" removes it, so Resume / Open Studio / Open Claude only make
+// sense when this is true.
+func worktreeExists(ticket string) bool {
+	_, err := os.Stat(filepath.Join(paths.WorktreeFor(ticket), ".git"))
+	return err == nil
+}
+
+// agentActions returns the menu items that make sense for one agent's state and
+// whether its worktree still exists. Shown when the user presses Enter on it.
 func agentActions(s store.Session) []paletteItem {
 	var items []paletteItem
-	switch {
-	case s.State == "awaiting-answer":
+	hasWT := worktreeExists(s.Ticket)
+	stuck := s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s)
+	done := s.State == "review" || s.State == "merged" || s.State == "closed"
+
+	if s.State == "awaiting-answer" {
 		items = append(items, paletteItem{"answer", "Answer the questions", "reply, then the agent resumes"})
-	case s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s):
-		items = append(items, paletteItem{"resume", "Resume (verify & ship)", "re-run the gate on your fix, then PR"})
 	}
-	items = append(items,
-		paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
-		paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"},
-	)
-	if s.State != "review" && s.State != "merged" && s.State != "closed" {
+	if hasWT {
+		if stuck {
+			items = append(items, paletteItem{"resume", "Resume (verify & ship)", "re-run the gate on your fix, then PR"})
+		}
+		items = append(items,
+			paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
+			paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"},
+		)
+	} else if stuck {
+		// Worktree is gone (stopped/cleaned, or it never built) — only a fresh run is possible.
+		items = append(items, paletteItem{"rerun", "Run again (fresh)", "no worktree left — start this ticket from scratch"})
+	}
+	// Stop is available for live/stuck rows (kills the process, removes the
+	// worktree, and clears it into STOPPED) — but not for finished or already-
+	// stopped rows.
+	if !done && s.State != store.StateStopped {
 		items = append(items, paletteItem{"stop", "Stop & clean up", "kill the process and remove the worktree"})
 	}
 	return items
@@ -84,6 +106,11 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		if s := m.selected(); s != nil {
 			m.notice = "resuming " + s.Ticket + " (verify & ship)…"
 			return m, m.launchRun(s.Ticket + " --resume")
+		}
+	case "rerun":
+		if s := m.selected(); s != nil {
+			m.notice = "starting " + s.Ticket + " fresh…"
+			return m, m.launchRun(s.Ticket)
 		}
 	case "stop":
 		if s := m.selected(); s != nil {
