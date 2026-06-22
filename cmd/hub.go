@@ -279,6 +279,9 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Branch", value: repo.Branch},
 		{label: "Compile", value: repo.Compile},
 		{label: "Test", value: repo.Test},
+		{label: "Model · plan", value: cfg.ModelPlan},
+		{label: "Model · implement", value: cfg.ModelImpl},
+		{label: "Model · review", value: cfg.ModelReview},
 	}
 }
 
@@ -297,6 +300,9 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	repo.Branch = f[6].value
 	repo.Compile = f[7].value
 	repo.Test = f[8].value
+	cfg.ModelPlan = f[9].value
+	cfg.ModelImpl = f[10].value
+	cfg.ModelReview = f[11].value
 	cfg.Repos = []config.Repo{repo}
 }
 
@@ -352,14 +358,15 @@ func (m *monitorModel) openSetupForm() {
 			if err != nil {
 				cfg = &config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 			}
-			applyConfigFields(cfg, f[:9]) // first 9 are the config fields
+			n := len(f) - 2 // last two fields are the secret tokens
+			applyConfigFields(cfg, f[:n])
 			if err := config.Save(cfg); err != nil {
 				return formDoneMsg{err: err}
 			}
-			if tok := strings.TrimSpace(f[9].value); tok != "" {
+			if tok := strings.TrimSpace(f[n].value); tok != "" {
 				_ = secrets.Set(secrets.Jira, tok)
 			}
-			if key := strings.TrimSpace(f[10].value); key != "" {
+			if key := strings.TrimSpace(f[n+1].value); key != "" {
 				_ = secrets.Set(secrets.Anthropic, key)
 			}
 			return formDoneMsg{notice: "setup saved — pick Doctor to verify"}

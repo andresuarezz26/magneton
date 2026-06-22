@@ -13,6 +13,9 @@ func TestConfigFieldsRoundTrip(t *testing.T) {
 		JiraEmail:            "me@x.com",
 		JiraInProgressStatus: "En curso",
 		Concurrency:          5,
+		ModelPlan:            "claude-opus-4-8",
+		ModelImpl:            "claude-sonnet-4-6",
+		ModelReview:          "claude-haiku-4-5",
 		Repos: []config.Repo{{
 			Path: "/r", JQL: "q", Branch: "b", Compile: "c", Test: "t",
 		}},
@@ -23,6 +26,9 @@ func TestConfigFieldsRoundTrip(t *testing.T) {
 	if out.JiraBaseURL != in.JiraBaseURL || out.JiraEmail != in.JiraEmail ||
 		out.JiraInProgressStatus != in.JiraInProgressStatus || out.Concurrency != 5 {
 		t.Errorf("scalar round-trip failed: %+v", out)
+	}
+	if out.ModelPlan != "claude-opus-4-8" || out.ModelImpl != "claude-sonnet-4-6" || out.ModelReview != "claude-haiku-4-5" {
+		t.Errorf("model round-trip failed: plan=%q impl=%q review=%q", out.ModelPlan, out.ModelImpl, out.ModelReview)
 	}
 	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Compile != "c" {
 		t.Errorf("repo round-trip failed: %+v", out.Repos)
@@ -51,7 +57,7 @@ func TestConfigActionOpensForm(t *testing.T) {
 	if hub.view != viewForm || hub.form == nil {
 		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)
 	}
-	if len(hub.form.fields) != 9 {
-		t.Errorf("config form should have 9 fields, got %d", len(hub.form.fields))
+	if len(hub.form.fields) != 12 {
+		t.Errorf("config form should have 12 fields, got %d", len(hub.form.fields))
 	}
 }
