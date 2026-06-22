@@ -74,3 +74,39 @@ func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
+
+func TestPushForceAllowsRerun(t *testing.T) {
+	repo := setupRepo(t)
+	wt := filepath.Join(t.TempDir(), "KAN-1")
+	branch := "ai/kan-1-x"
+
+	// First run: create worktree, commit, push (creates the remote branch).
+	if err := CreateWorktree(repo, wt, branch, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAll(wt, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(wt, branch); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+
+	// Fresh re-run: CreateWorktree resets the branch to origin/main (-B), new
+	// commit → divergent history. A plain push is rejected (non-fast-forward);
+	// force-with-lease must let it through.
+	if err := CreateWorktree(repo, wt, branch, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "b.txt"), []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAll(wt, "v2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(wt, branch); err != nil {
+		t.Fatalf("re-run push should force past the divergent remote branch: %v", err)
+	}
+}

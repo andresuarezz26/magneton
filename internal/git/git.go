@@ -81,8 +81,12 @@ func CommitAll(worktreeDir, msg string) error {
 	return err
 }
 
-// Push pushes the branch to origin and sets upstream.
+// Push force-pushes the branch to origin (with lease) and sets upstream. The
+// ai/<ticket>-<slug> branches are magneton-owned and regenerated each run, so a
+// fresh re-run rewrites history and a plain push would be rejected as non-fast-
+// forward. --force-with-lease overwrites the prior remote branch safely:
+// CreateWorktree fetches first, so the lease reflects the current remote.
 func Push(worktreeDir, branch string) error {
-	_, err := run(worktreeDir, "push", "-u", "origin", branch)
+	_, err := run(worktreeDir, "push", "--force-with-lease", "-u", "origin", branch)
 	return err
 }
