@@ -1,5 +1,9 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -s -w -X github.com/andresuarezz26/magneton/cmd.version=$(VERSION)
+VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+POSTHOG_API_KEY  ?=
+LDFLAGS          := -s -w \
+	-X github.com/andresuarezz26/magneton/cmd.version=$(VERSION) \
+	-X github.com/andresuarezz26/magneton/internal/telemetry.APIKey=$(POSTHOG_API_KEY) \
+	-X github.com/andresuarezz26/magneton/internal/telemetry.Version=$(VERSION)
 
 .PHONY: build install test vet lint snapshot clean
 

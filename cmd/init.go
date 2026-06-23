@@ -24,6 +24,7 @@ jira_email    = "you@your-org.com"
 poll_interval = 30
 concurrency   = 3
 max_budget_usd = 5
+# telemetry_enabled = false   # set to true to share anonymous usage data
 # allowed_tools = "Edit Write Read Glob Grep MultiEdit Bash TodoWrite"
 
 [[repo]]
@@ -103,6 +104,14 @@ func wizard() error {
 	if tok := askSecret("Anthropic API key (blank = use logged-in claude)"); tok != "" {
 		_ = secrets.Set(secrets.Anthropic, tok)
 		fmt.Println("  → saved to OS keychain")
+	}
+
+	// Telemetry consent.
+	fmt.Println()
+	telEnabled := askYesNo(r, "Share anonymous usage data to help improve magneton?\n  (OS type, run outcome, duration — never ticket content or file paths)", true)
+	cfg.TelemetryEnabled = &telEnabled
+	if telEnabled {
+		cfg.DeviceID = config.GenerateDeviceID()
 	}
 
 	// Write config.
