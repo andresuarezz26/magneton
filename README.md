@@ -107,11 +107,20 @@ The implement allowlist is configurable via `allowed_tools`; widening it to incl
 
 ### Prerequisites
 
-- **`git`** — available in PATH
-- **`gh`** — GitHub CLI, authenticated (`gh auth login`)
-- **`claude`** — Claude Code CLI, authenticated
-- **Go 1.24+** — to build from source
-- **Android SDK** with at least one AVD — only required for tasks that involve UI or instrumented tests (see [Android Emulator](#android-emulator))
+**Required** — this is the whole list to get a reviewed diff:
+
+- **`git`** — in PATH
+- **`claude`** — Claude Code CLI, *authenticated* (a logged-in session is enough; it's the engine)
+- **Go 1.24+** — to build from source (or install via [Homebrew](#homebrew-release))
+- **A repo that builds** — magneton runs *your* repo's build/test (e.g. Gradle). For a quick smoke test you can set the compile/test commands to `true`.
+
+**Optional** — add only what you actually use:
+
+- **`gh`** (authenticated) — only to **open the pull request**. `agent run … --dry-run` skips push + PR, so you can run the whole loop without it.
+- **Jira** (site URL + email + API token) — only to **fetch tickets automatically** by key (`agent run KAN-4`). For `.md` tickets, Jira is never touched.
+- **Android SDK** — only to build/test an actual Android project.
+- **An AVD + `adb`/emulator** — only for **instrumented (on-device UI) tests**. Without one, instrumented tasks fall back to unit tests.
+- **`ANTHROPIC_API_KEY`** — only if you're *not* using a logged-in `claude` session.
 
 ### From source
 
@@ -136,15 +145,53 @@ Maintainers cut releases with GoReleaser (`make snapshot` for a local dry run);
 `.goreleaser.yaml` builds static binaries for darwin/linux amd64/arm64 and
 publishes the Homebrew formula.
 
+## Quickstart — your first PR from a `.md` file (no Jira, no emulator)
+
+You don't need Jira or an emulator to start. Describe the work in a plain markdown
+file and point magneton at it — it plans, implements, runs your build/test gate,
+and (unless `--dry-run`) opens a PR.
+
+```bash
+# 1. One-time: point magneton at your repo + how to build it.
+#    `agent init` asks for Jira too, but you can leave those blank — only the
+#    repo path and compile/test commands matter for local .md runs.
+agent init
+
+# 2. Write a ticket as markdown (the first # heading is the title).
+cat > add-logout.md <<'EOF'
+# Add a logout button to the settings screen
+
+Wire it to AuthRepository.logout() and navigate back to the login screen.
+EOF
+
+# 3. Run it. --dry-run does everything except push + PR (no `gh` needed).
+agent run ./add-logout.md --dry-run
+
+# 4. See what it produced.
+git -C ~/.agent/worktrees/ADD-LOGOUT diff
+```
+
+Drop `--dry-run` (with `gh` authenticated and a pushable `origin`) to open the PR.
+Run several at once: `agent run a.md b.md c.md`. Then open the dashboard with
+`agent` to watch, answer, resume, or stop them.
+
+**Want it to pull tickets for you instead?** Set up Jira (below) and run by key:
+`agent run KAN-123`. **Need real on-device UI tests?** Add an AVD (see
+[Android Emulator](#android-emulator)). Both are optional.
+
 ## Setup
 
 Run **`agent`** (the hub) and pick **Setup wizard** from the menu (`:`), or run
 **`agent init`** directly. On a terminal it launches an interactive wizard (prompts
 for Jira URL/email, repo path, build/test commands, and tokens — stored in the
-OS keychain — then runs a connectivity check against Jira, git, `claude`, and
-`gh`). When stdin isn't a TTY (CI), it scaffolds a commented `~/.agent/config.toml`
-to edit by hand. Once configured, just run **`agent`** and start a ticket from the
-dashboard.
+OS keychain — then runs a connectivity check). When stdin isn't a TTY (CI), it
+scaffolds a commented `~/.agent/config.toml` to edit by hand. Once configured, just
+run **`agent`** and start a ticket from the dashboard.
+
+> **Only the repo path and compile/test commands are required.** Leave the Jira
+> fields blank to run from `.md` files; fill them in only when you want magneton to
+> fetch tickets automatically by key (the connectivity check will simply mark Jira
+> as not-configured, which is fine).
 
 To **edit the config** later:
 ```bash
@@ -217,7 +264,11 @@ gh auth login                             # used by `gh pr create`
 export DROIDPILOT_ANTHROPIC_TOKEN=...    # if not using the logged-in claude session
 ```
 
-## Android Emulator
+## Android Emulator (optional)
+
+You only need this for **instrumented (on-device UI) tests**. If you don't set an
+`avd_name`, magneton never boots an emulator — instrumented tasks fall back to unit
+tests. Set it up only when you want Espresso/Compose tests to run on a device.
 
 The orchestrator decides **automatically** during the plan stage whether a task
 needs an emulator. Claude inspects the ticket and codebase:
