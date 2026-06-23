@@ -42,18 +42,19 @@ const (
 
 // Session is one ticket's row.
 type Session struct {
-	Ticket    string
-	Repo      string
-	State     string
-	Retries   int
-	Branch    string
-	Worktree  string
-	PRURL     string
-	Summary   string
-	SessionID string // Claude session ID for cross-stage resume
-	PID       int    // OS pid of the process driving this session (0 = unknown)
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Ticket     string
+	Repo       string
+	State      string
+	Retries    int
+	Branch     string
+	Worktree   string
+	PRURL      string
+	Summary    string
+	SessionID  string // Claude session ID for cross-stage resume
+	PID        int    // OS pid of the process driving this session (0 = unknown)
+	SourcePath string // .md file path for local tickets; empty for Jira tickets
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Store wraps the SQLite connection.
@@ -61,18 +62,19 @@ type Store struct{ db *sql.DB }
 
 const schema = `
 CREATE TABLE IF NOT EXISTS sessions (
-  ticket     TEXT PRIMARY KEY,
-  repo       TEXT NOT NULL DEFAULT '',
-  state      TEXT NOT NULL,
-  retries    INTEGER NOT NULL DEFAULT 0,
-  branch     TEXT NOT NULL DEFAULT '',
-  worktree   TEXT NOT NULL DEFAULT '',
-  pr_url     TEXT NOT NULL DEFAULT '',
-  summary    TEXT NOT NULL DEFAULT '',
-  session_id TEXT NOT NULL DEFAULT '',
-  pid        INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  ticket      TEXT PRIMARY KEY,
+  repo        TEXT NOT NULL DEFAULT '',
+  state       TEXT NOT NULL,
+  retries     INTEGER NOT NULL DEFAULT 0,
+  branch      TEXT NOT NULL DEFAULT '',
+  worktree    TEXT NOT NULL DEFAULT '',
+  pr_url      TEXT NOT NULL DEFAULT '',
+  summary     TEXT NOT NULL DEFAULT '',
+  session_id  TEXT NOT NULL DEFAULT '',
+  pid         INTEGER NOT NULL DEFAULT 0,
+  source_path TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS emulators (
   avd_name     TEXT PRIMARY KEY,
@@ -96,6 +98,7 @@ func Open(path string) (*Store, error) {
 	// Migrate existing DBs (ignore "duplicate column" errors on re-run).
 	db.Exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE sessions ADD COLUMN pid INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE sessions ADD COLUMN source_path TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -136,6 +139,17 @@ func (s *Store) SetSessionID(ticket, sessionID string) error {
 	return err
 }
 
+// SetSourcePath records the .md file path for local (non-Jira) tickets so that
+// TUI re-launch actions (Resume, Run again) can reconstruct the right command
+// without hitting the Jira API.
+func (s *Store) SetSourcePath(ticket, path string) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET source_path=?, updated_at=? WHERE ticket=?`,
+		path, time.Now().Unix(), ticket,
+	)
+	return err
+}
+
 // SetPID records the OS pid of the process driving this session, so the monitor
 // can tell a live agent from a dead one (deterministic liveness via kill -0).
 func (s *Store) SetPID(ticket string, pid int) error {
@@ -160,7 +174,7 @@ func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 // Get returns one session.
 func (s *Store) Get(ticket string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at
 		 FROM sessions WHERE ticket=?`, ticket)
 	return scan(row)
 }
@@ -168,7 +182,7 @@ func (s *Store) Get(ticket string) (*Session, error) {
 // List returns all sessions, most recently updated first.
 func (s *Store) List() ([]Session, error) {
 	rows, err := s.db.Query(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -268,7 +282,7 @@ func scan(r scanner) (*Session, error) {
 	var s Session
 	var created, updated int64
 	if err := r.Scan(&s.Ticket, &s.Repo, &s.State, &s.Retries, &s.Branch,
-		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &created, &updated); err != nil {
+		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &s.SourcePath, &created, &updated); err != nil {
 		return nil, err
 	}
 	s.CreatedAt = time.Unix(created, 0)

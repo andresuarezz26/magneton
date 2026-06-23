@@ -11,10 +11,11 @@ import (
 // ticketSpec is one resolved unit of work, from Jira or a local file.
 // It is source-agnostic: the runner only ever sees ticket/summary/desc.
 type ticketSpec struct {
-	ticket  string // CLEAN id, safe for WorktreeFor/branch/LogFor
-	summary string // may be "" for Jira (filled in after FetchIssue)
-	desc    string
-	local   bool // true => skip Jira fetch/transition and never comment to Jira
+	ticket     string // CLEAN id, safe for WorktreeFor/branch/LogFor
+	summary    string // may be "" for Jira (filled in after FetchIssue)
+	desc       string
+	local      bool   // true => skip Jira fetch/transition and never comment to Jira
+	sourcePath string // absolute path to the .md file; empty for Jira tickets
 }
 
 var (
@@ -53,11 +54,16 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 		return ticketSpec{}, fmt.Errorf("%s: could not derive a title (file is empty?)", path)
 	}
 
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
 	return ticketSpec{
-		ticket:  ticketIDFromPath(path),
-		summary: title,
-		desc:    strings.TrimSpace(body),
-		local:   true,
+		ticket:     ticketIDFromPath(path),
+		summary:    title,
+		desc:       strings.TrimSpace(body),
+		local:      true,
+		sourcePath: abs,
 	}, nil
 }
 

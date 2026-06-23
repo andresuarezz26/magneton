@@ -105,12 +105,20 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "resume":
 		if s := m.selected(); s != nil {
 			m.notice = "resuming " + s.Ticket + " (verify & ship)…"
-			return m, m.launchRun(s.Ticket + " --resume")
+			arg := s.Ticket
+			if s.SourcePath != "" {
+				arg = s.SourcePath
+			}
+			return m, m.launchRun(arg + " --resume")
 		}
 	case "rerun":
 		if s := m.selected(); s != nil {
 			m.notice = "starting " + s.Ticket + " fresh…"
-			return m, m.launchRun(s.Ticket)
+			arg := s.Ticket
+			if s.SourcePath != "" {
+				arg = s.SourcePath
+			}
+			return m, m.launchRun(arg)
 		}
 	case "stop":
 		if s := m.selected(); s != nil {

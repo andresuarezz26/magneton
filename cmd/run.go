@@ -194,9 +194,12 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	}
 	logf("[%s] %s", sp.ticket, summary)
 
-	// State store so `agent status` reflects manual runs too.
+	// State store so `magneton status` reflects manual runs too.
 	_, _ = st.Claim(sp.ticket, repo.Path, summary)
 	_ = st.SetPID(sp.ticket, os.Getpid()) // for monitor liveness (kill -0)
+	if sp.sourcePath != "" {
+		_ = st.SetSourcePath(sp.ticket, sp.sourcePath)
+	}
 	// Reset state immediately so a re-run leaves a stale terminal state
 	// (failed/needs-you/stopped/review) right away instead of lingering there
 	// until the pipeline reaches planning (after the slow worktree setup).
