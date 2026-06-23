@@ -67,15 +67,8 @@ func runE(_ *cobra.Command, args []string) error {
 	}
 	defer st.Close()
 
-	// Fan out, capped at cfg.Concurrency, mirroring the daemon's worker pool.
-	// No ctx: the CLI is foreground and runs every ticket to completion.
-	conc := cfg.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
 	var (
 		wg     sync.WaitGroup
-		sem    = make(chan struct{}, conc)
 		mu     sync.Mutex
 		failed int
 	)
@@ -83,8 +76,6 @@ func runE(_ *cobra.Command, args []string) error {
 		wg.Add(1)
 		go func(sp ticketSpec) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			out := runOne(sp, cfg, repo, st)
 			if out.Err != nil || out.State == store.StateFailed {
 				mu.Lock()
