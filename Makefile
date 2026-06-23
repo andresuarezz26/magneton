@@ -1,4 +1,4 @@
-VERSION ?= dev
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X github.com/andresuarezz26/magneton/cmd.version=$(VERSION)
 
 .PHONY: build install test vet lint snapshot clean
