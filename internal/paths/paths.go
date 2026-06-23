@@ -24,12 +24,9 @@ func Templates() string { return filepath.Join(Root(), "templates") }
 func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
 func PidFile() string    { return filepath.Join(Root(), "daemon.pid") }
 
-func Answers() string { return filepath.Join(Root(), "answers") }
-
-func WorktreeFor(ticket string) string  { return filepath.Join(Worktrees(), ticket) }
-func GradleHomeFor(_ string) string     { return filepath.Join(Root(), ".gradle-home") }
-func LogFor(ticket string) string       { return filepath.Join(Logs(), ticket+".log") }
-func AnswerFor(ticket string) string    { return filepath.Join(Answers(), ticket+".md") }
+func WorktreeFor(ticket string) string { return filepath.Join(Worktrees(), ticket) }
+func GradleHomeFor(_ string) string    { return filepath.Join(Root(), ".gradle-home") }
+func LogFor(ticket string) string      { return filepath.Join(Logs(), ticket+".log") }
 
 // WriteLocalProperties writes sdk.dir to <dir>/local.properties so Gradle can
 // locate the Android SDK in fresh worktrees where the file is git-ignored.
@@ -47,7 +44,7 @@ func WriteLocalProperties(dir, sdkPath string) error {
 
 // EnsureDirs creates the directory skeleton if missing.
 func EnsureDirs() error {
-	for _, d := range []string{Root(), Worktrees(), Logs(), Templates(), Answers()} {
+	for _, d := range []string{Root(), Worktrees(), Logs(), Templates()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

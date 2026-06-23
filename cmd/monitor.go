@@ -438,51 +438,37 @@ func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submitAnswer saves the answer locally and relaunches the agent. No Jira API
-// calls: for .md tickets the answer is appended to the source file; for Jira
-// tickets it's written to ~/.agent/answers/<ticket>.md and the runner picks it
-// up before the plan stage. Everything stays inside the TUI.
+// submitAnswer appends the answer to the .md source file and relaunches. This
+// only works for local tickets (SourcePath set). For Jira tickets the action
+// is not offered — use "Open in Claude Code" to answer in the session directly.
 func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 	self, st := m.selfPath, m.store
 	return func() tea.Msg {
-		// Resolve the source: .md path (local ticket) or empty (Jira ticket).
 		var sourcePath string
 		if st != nil {
 			if sess, err := st.Get(key); err == nil && sess != nil {
 				sourcePath = sess.SourcePath
 			}
 		}
-
-		if sourcePath != "" {
-			// Local .md ticket: append answer to the file so the next run sees it.
-			raw, err := os.ReadFile(sourcePath)
-			if err != nil {
-				return answerDoneMsg{ticket: key, err: fmt.Errorf("read %s: %w", sourcePath, err)}
-			}
-			updated := strings.TrimSpace(string(raw)) + "\n\n---\nAnswers:\n" + answer
-			if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
-				return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
-			}
-			return launchAndReturn(key, self, sourcePath)
+		if sourcePath == "" {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("answer via TUI only works for local .md tickets — use \"Open in Claude Code\" to answer in the session")}
 		}
-
-		// Jira ticket: write to a local answers sidecar; runner appends it to desc.
-		answerFile := paths.AnswerFor(key)
-		if err := os.WriteFile(answerFile, []byte(answer+"\n"), 0o644); err != nil {
-			return answerDoneMsg{ticket: key, err: fmt.Errorf("write answers file: %w", err)}
+		raw, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("read %s: %w", sourcePath, err)}
 		}
-		return launchAndReturn(key, self, key)
+		updated := strings.TrimSpace(string(raw)) + "\n\n---\nAnswers:\n" + answer
+		if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
+		}
+		c := exec.Command(self, "run", sourcePath)
+		c.Stdout, c.Stderr = nil, nil
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Start(); err != nil {
+			return answerDoneMsg{ticket: key, err: err}
+		}
+		return answerDoneMsg{ticket: key}
 	}
-}
-
-func launchAndReturn(ticket, self, runArg string) tea.Msg {
-	c := exec.Command(self, "run", runArg)
-	c.Stdout, c.Stderr = nil, nil
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := c.Start(); err != nil {
-		return answerDoneMsg{ticket: ticket, err: err}
-	}
-	return answerDoneMsg{ticket: ticket}
 }
 
 // ---- view ------------------------------------------------------------------
