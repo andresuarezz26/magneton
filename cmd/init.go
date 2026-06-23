@@ -28,7 +28,6 @@ max_budget_usd = 5
 
 [[repo]]
 path        = "~/src/android-app"
-jql         = "labels = ai-agent AND status = 'To Do'"
 branch      = "ai/{ticket}-{slug}"
 compile     = "./gradlew :app:compileDebug"
 test        = "./gradlew testDebugUnitTest"
@@ -86,7 +85,6 @@ func wizard() error {
 	cfg.JiraEmail = ask(r, "Jira email", "")
 	repo := config.Repo{
 		Path:       ask(r, "Repository path", "~/src/android-app"),
-		JQL:        ask(r, "JQL filter", "labels = ai-agent AND status = 'To Do'"),
 		Branch:     ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
 		Compile:    ask(r, "Compile command", "./gradlew :app:compileDebug"),
 		Test:       ask(r, "Test command", "./gradlew testDebugUnitTest"),

@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -176,12 +175,6 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 			return runner.Outcome{State: store.StateFailed, Err: fmt.Errorf("fetch %s: %w", sp.ticket, err)}
 		}
 		summary, desc = issue.Summary, issue.Description
-		if !strings.EqualFold(issue.Status, cfg.JiraInProgressStatus) {
-			logf("[%s] status is %q — transitioning to %q", sp.ticket, issue.Status, cfg.JiraInProgressStatus)
-			if err := jc.TransitionTo(sp.ticket, cfg.JiraInProgressStatus); err != nil {
-				logf("[%s] (warn) could not transition to %q: %v", sp.ticket, cfg.JiraInProgressStatus, err)
-			}
-		}
 	}
 
 	logf("[%s] %s", sp.ticket, summary)

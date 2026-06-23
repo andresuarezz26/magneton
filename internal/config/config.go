@@ -14,7 +14,6 @@ import (
 // Repo is one registered Android repository.
 type Repo struct {
 	Path          string `toml:"path"`
-	JQL           string `toml:"jql"`
 	Branch        string `toml:"branch"`
 	Compile       string `toml:"compile"`
 	Test          string `toml:"test"`
@@ -25,10 +24,9 @@ type Repo struct {
 
 // Config is the whole ~/.agent/config.toml.
 type Config struct {
-	JiraBaseURL          string  `toml:"jira_base_url"`
-	JiraEmail            string  `toml:"jira_email"`
-	JiraInProgressStatus string  `toml:"jira_in_progress_status"`
-	PollInterval         int     `toml:"poll_interval"`
+	JiraBaseURL  string  `toml:"jira_base_url"`
+	JiraEmail    string  `toml:"jira_email"`
+	PollInterval int     `toml:"poll_interval"`
 	Concurrency          int     `toml:"concurrency"`
 	AllowedTools         string  `toml:"allowed_tools"`
 	MaxBudgetUSD         float64 `toml:"max_budget_usd"`
@@ -84,9 +82,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ModelReview == "" {
 		c.ModelReview = "claude-haiku-4-5-20251001"
-	}
-	if c.JiraInProgressStatus == "" {
-		c.JiraInProgressStatus = "In Progress"
 	}
 	if c.AndroidSDKPath == "" {
 		if v := os.Getenv("ANDROID_HOME"); v != "" {

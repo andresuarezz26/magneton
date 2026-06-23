@@ -271,9 +271,7 @@ func configFields(cfg *config.Config) []formField {
 	return []formField{
 		{label: "Jira base URL", value: cfg.JiraBaseURL},
 		{label: "Jira email", value: cfg.JiraEmail},
-		{label: "In-progress status", value: cfg.JiraInProgressStatus},
 		{label: "Repo path", value: repo.Path},
-		{label: "JQL", value: repo.JQL},
 		{label: "Branch", value: repo.Branch},
 		{label: "Compile", value: repo.Compile},
 		{label: "Test", value: repo.Test},
@@ -291,15 +289,13 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	}
 	cfg.JiraBaseURL = f[0].value
 	cfg.JiraEmail = f[1].value
-	cfg.JiraInProgressStatus = f[2].value
-	repo.Path = f[3].value
-	repo.JQL = f[4].value
-	repo.Branch = f[5].value
-	repo.Compile = f[6].value
-	repo.Test = f[7].value
-	cfg.ModelPlan = f[8].value
-	cfg.ModelImpl = f[9].value
-	cfg.ModelReview = f[10].value
+	repo.Path = f[2].value
+	repo.Branch = f[3].value
+	repo.Compile = f[4].value
+	repo.Test = f[5].value
+	cfg.ModelPlan = f[6].value
+	cfg.ModelImpl = f[7].value
+	cfg.ModelReview = f[8].value
 	cfg.Repos = []config.Repo{repo}
 }
 
@@ -337,7 +333,6 @@ func (m *monitorModel) openSetupForm() {
 			Concurrency: 3, PollInterval: 30, MaxBudgetUSD: 5,
 			Repos: []config.Repo{{
 				Path: "~/src/android-app", Branch: "ai/{ticket}-{slug}",
-				JQL:     "labels = ai-agent AND status = 'To Do'",
 				Compile: "./gradlew :app:compileDebug", Test: "./gradlew testDebugUnitTest",
 			}},
 		}
