@@ -66,7 +66,7 @@ func scaffoldConfig() error {
 		fmt.Printf("• config already exists at %s\n", cfgPath)
 	}
 	fmt.Println("✓ templates in", paths.Templates())
-	fmt.Println("\nNext: set MAGNETON_JIRA_TOKEN, run `gh auth login`, then `agent run <TICKET>`.")
+	fmt.Println("\nNext: run `gh auth login`, then `magneton run ./ticket.md --dry-run`.")
 	return nil
 }
 
@@ -82,28 +82,34 @@ func wizard() error {
 
 	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
-	cfg.JiraBaseURL = strings.TrimRight(ask(r, "Jira base URL", "https://your-org.atlassian.net"), "/")
-	cfg.JiraEmail = ask(r, "Jira email", "")
+
+	// Required: repo settings.
 	repo := config.Repo{
 		Path:       ask(r, "Repository path", "~/src/android-app"),
 		Branch:     ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
-		Compile:    ask(r, "Compile command", "./gradlew :app:compileDebug"),
-		Test:       ask(r, "Test command", "./gradlew testDebugUnitTest"),
+		Compile:    ask(r, "Compile command [optional — Claude Code will figure it out]", ""),
+		Test:       ask(r, "Test command [optional — Claude Code will figure it out]", ""),
 		MaxRetries: 3,
 	}
 	cfg.Repos = []config.Repo{repo}
 
-	// Secrets → OS keychain (Decision 14).
-	if tok := askSecret("Jira API token"); tok != "" {
+	// Optional: Anthropic key (most users rely on the logged-in claude session).
+	if tok := askSecret("Anthropic API key [optional — blank = use logged-in claude]"); tok != "" {
+		_ = secrets.Set(secrets.Anthropic, tok)
+		fmt.Println("  → saved to OS keychain")
+	}
+
+	// Optional: Jira integration.
+	fmt.Println("\n  — Jira integration [optional] ——————————————————————")
+	fmt.Println("  Skip these to run tickets from local .md files only.")
+	cfg.JiraBaseURL = strings.TrimRight(ask(r, "Jira base URL [optional]", ""), "/")
+	cfg.JiraEmail = ask(r, "Jira email [optional]", "")
+	if tok := askSecret("Jira API token [optional]"); tok != "" {
 		if err := secrets.Set(secrets.Jira, tok); err != nil {
 			fmt.Println("  (warn) could not store Jira token in keychain:", err)
 		} else {
 			fmt.Println("  → saved to OS keychain")
 		}
-	}
-	if tok := askSecret("Anthropic API key (blank = use logged-in claude)"); tok != "" {
-		_ = secrets.Set(secrets.Anthropic, tok)
-		fmt.Println("  → saved to OS keychain")
 	}
 
 	// Telemetry consent.
@@ -120,15 +126,17 @@ func wizard() error {
 	}
 	fmt.Printf("\n✓ wrote %s\n", cfgPath)
 
-	// Connectivity check (Decision 13).
+	// Connectivity check.
 	fmt.Println("\nconnectivity check")
-	jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-	report("Jira", jc.Verify())
 	report("git remote (origin)", checkGitRemote(config.Expand(repo.Path)))
 	report("claude CLI", exec.Command("claude", "--version").Run())
 	report("gh CLI", exec.Command("gh", "auth", "status").Run())
+	if cfg.JiraBaseURL != "" {
+		jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
+		report("Jira", jc.Verify())
+	}
 
-	fmt.Println("\nReady. Try:  agent run <TICKET> --dry-run")
+	fmt.Println("\nReady. Try:  magneton run ./ticket.md --dry-run")
 	return nil
 }
 
