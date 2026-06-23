@@ -103,47 +103,47 @@ The implement allowlist is configurable via `allowed_tools`; widening it to incl
 | `internal/notify` | desktop notification + daemon-log line |
 | `internal/paths` | `~/.agent` layout + `local.properties` writer |
 
-## Install
+## Install — 30 seconds
 
-### Prerequisites
+**Requirements:** [Claude Code](https://claude.ai/download) (authenticated), `git`, Go 1.24+
 
-**Required** — this is the whole list to get a reviewed diff:
+### One-paste install (recommended)
 
-- **`git`** — in PATH
-- **`claude`** — Claude Code CLI, *authenticated* (a logged-in session is enough; it's the engine)
-- **Go 1.24+** — to build from source (or install via [Homebrew](#homebrew-release))
-- **A repo that builds** — magneton runs *your* repo's build/test (e.g. Gradle). For a quick smoke test you can set the compile/test commands to `true`.
+Open Claude Code and paste this. Claude does the rest:
 
-**Optional** — add only what you actually use:
+> Install magneton: `git clone --single-branch --depth 1 https://github.com/andresuarezz26/magneton.git ~/.magneton && cd ~/.magneton && ./setup` — then run `agent init` to configure my first repo and check connectivity.
 
-- **`gh`** (authenticated) — only to **open the pull request**. `agent run … --dry-run` skips push + PR, so you can run the whole loop without it.
-- **Jira** (site URL + email + API token) — only to **fetch tickets automatically** by key (`agent run KAN-4`). For `.md` tickets, Jira is never touched.
-- **Android SDK** — only to build/test an actual Android project.
-- **An AVD + `adb`/emulator** — only for **instrumented (on-device UI) tests**. Without one, instrumented tasks fall back to unit tests.
-- **`ANTHROPIC_API_KEY`** — only if you're *not* using a logged-in `claude` session.
+Claude clones the repo, builds the binary, puts it in `~/.local/bin/agent`, and walks you through `agent init`. The whole thing takes under a minute.
 
-### From source
+### Manual install
 
 ```bash
 git clone https://github.com/andresuarezz26/magneton
 cd magneton
-make install          # builds and installs to ~/.local/bin/agent
+make install          # builds and copies to ~/.local/bin/agent
 ```
 
-Or build without installing:
+Or just build in-place:
 ```bash
-make build            # → ./agent binary in the current directory
+make build            # → ./agent in the current directory
 ```
 
-### Homebrew (release)
+### Prerequisites
 
-```bash
-brew install magneton/tap/magneton
-```
+**Required** — the whole list to get to a reviewed diff:
 
-Maintainers cut releases with GoReleaser (`make snapshot` for a local dry run);
-`.goreleaser.yaml` builds static binaries for darwin/linux amd64/arm64 and
-publishes the Homebrew formula.
+- **`claude`** — Claude Code CLI, authenticated (a logged-in session is enough; it's the engine)
+- **`git`** — in PATH
+- **Go 1.24+** — to build from source
+- **A repo that builds** — magneton runs *your* build/test commands. For a smoke test set them to `true`.
+
+**Optional** — add only what you actually use:
+
+- **`gh`** (authenticated) — only to open the pull request. `--dry-run` skips push + PR, so the whole loop works without it.
+- **Jira** (site URL + email + API token) — only to fetch tickets by key (`agent run KAN-4`). For `.md` files Jira is never touched.
+- **Android SDK** — only to build/test an actual Android project.
+- **An AVD + `adb`/emulator** — only for instrumented (on-device) tests. Without one, those tasks fall back to unit tests.
+- **`ANTHROPIC_API_KEY`** — only if you're *not* using a logged-in `claude` session.
 
 ## Quickstart — your first PR from a `.md` file (no Jira, no emulator)
 
