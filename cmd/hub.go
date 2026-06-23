@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -273,7 +272,6 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Jira base URL", value: cfg.JiraBaseURL},
 		{label: "Jira email", value: cfg.JiraEmail},
 		{label: "In-progress status", value: cfg.JiraInProgressStatus},
-		{label: "Concurrency", value: strconv.Itoa(cfg.Concurrency)},
 		{label: "Repo path", value: repo.Path},
 		{label: "JQL", value: repo.JQL},
 		{label: "Branch", value: repo.Branch},
@@ -294,15 +292,14 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	cfg.JiraBaseURL = f[0].value
 	cfg.JiraEmail = f[1].value
 	cfg.JiraInProgressStatus = f[2].value
-	cfg.Concurrency, _ = strconv.Atoi(f[3].value)
-	repo.Path = f[4].value
-	repo.JQL = f[5].value
-	repo.Branch = f[6].value
-	repo.Compile = f[7].value
-	repo.Test = f[8].value
-	cfg.ModelPlan = f[9].value
-	cfg.ModelImpl = f[10].value
-	cfg.ModelReview = f[11].value
+	repo.Path = f[3].value
+	repo.JQL = f[4].value
+	repo.Branch = f[5].value
+	repo.Compile = f[6].value
+	repo.Test = f[7].value
+	cfg.ModelPlan = f[8].value
+	cfg.ModelImpl = f[9].value
+	cfg.ModelReview = f[10].value
 	cfg.Repos = []config.Repo{repo}
 }
 
