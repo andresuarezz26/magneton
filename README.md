@@ -28,7 +28,12 @@ Claude clones the repo, builds the binary, puts it in `~/.local/bin/magneton`, a
 
 ### Manual install
 
-**Requirements:** [Claude Code](https://claude.ai/download) (authenticated), `git`, Go 1.24+
+**Prerequisites:**
+
+- [Claude Code](https://claude.ai/download) — authenticated and in your PATH (`claude --version` works)
+- [Android Studio](https://developer.android.com/studio) — for your Android project and AVD management
+- `git` and `gh` (GitHub CLI, authenticated) — for branch management and opening PRs
+- Go 1.24+ — to build from source
 
 ```bash
 git clone https://github.com/andresuarezz26/magneton.git ~/.magneton
@@ -64,11 +69,16 @@ Drop `--dry-run` (with `gh` authenticated) to open a real PR. Run several ticket
 magneton run a.md b.md c.md
 ```
 
-To run a Jira ticket by key instead of a file, configure Jira during `magneton init`, then:
+### Jira integration
+
+If you connect Jira during `magneton init` (site URL + email + API token), you can run tickets directly by their Jira key — magneton fetches the title and description automatically:
 
 ```bash
-magneton run PROJ-123
+magneton run PROJ-123          # fetch from Jira, plan → implement → verify → PR
+magneton run PROJ-123 PROJ-124 # run two Jira tickets in parallel
 ```
+
+No Jira? No problem — the markdown file approach above works without it.
 
 ---
 
@@ -100,16 +110,26 @@ Select a ticket and press enter to answer a question, resume after a manual fix,
 ## CLI reference
 
 ```bash
-magneton                        # open the TUI dashboard (default)
-magneton run PROJ-123           # run one ticket end-to-end
-magneton run a.md b.md          # run local markdown tickets in parallel
-magneton run PROJ-123 --dry-run # plan + implement + verify, skip push + PR
-magneton run PROJ-123 --resume  # re-gate an existing worktree you fixed by hand, then PR
-magneton doctor                 # connectivity check (Jira, git, claude, gh)
-magneton logs PROJ-123          # print the session log
-magneton status                 # table of all sessions
-magneton start                  # start the background daemon (polls Jira, runs fleet)
-magneton stop                   # stop the daemon gracefully
+magneton                          # open the TUI dashboard (default)
+
+# Local markdown tickets (no Jira required)
+magneton run ./ticket.md          # plan → implement → verify → PR
+magneton run a.md b.md c.md       # run several in parallel
+
+# Jira tickets (requires Jira configured in magneton init)
+magneton run PROJ-123             # fetch Jira ticket, then plan → implement → verify → PR
+magneton run PROJ-123 PROJ-124    # run two Jira tickets in parallel
+
+# Flags (work with both Jira keys and markdown files)
+magneton run PROJ-123 --dry-run   # skip push + PR (safe for first runs)
+magneton run PROJ-123 --resume    # re-gate a worktree you fixed by hand, then PR
+
+# Other commands
+magneton doctor                   # connectivity check (Jira, git, claude, gh)
+magneton logs PROJ-123            # print the session log
+magneton status                   # table of all sessions
+magneton start                    # start the background daemon
+magneton stop                     # stop the daemon gracefully
 ```
 
 ---
