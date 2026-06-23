@@ -21,6 +21,7 @@ const (
 	viewRunInput
 	viewOutput
 	viewForm
+	viewConsent
 )
 
 // ---- messages --------------------------------------------------------------

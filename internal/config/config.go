@@ -2,6 +2,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,18 @@ type Config struct {
 	AVDName              string  `toml:"avd_name"`
 	AndroidSDKPath       string  `toml:"android_sdk_path"`
 	EmulatorIdleTimeout  int     `toml:"emulator_idle_timeout"`
+	TelemetryEnabled     *bool   `toml:"telemetry_enabled"`
+	DeviceID             string  `toml:"device_id"`
 	Repos                []Repo  `toml:"repo"`
+}
+
+// GenerateDeviceID returns a random UUID v4 string. Call once at consent time.
+func GenerateDeviceID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // Save writes the config to ~/.agent/config.toml (0600), creating/truncating it.

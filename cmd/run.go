@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/andresuarezz26/magneton/internal/runner"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 	"github.com/andresuarezz26/magneton/internal/store"
+	"github.com/andresuarezz26/magneton/internal/telemetry"
 )
 
 var (
@@ -58,6 +60,12 @@ func runE(_ *cobra.Command, args []string) error {
 		return err
 	}
 
+	tel := &telemetry.Client{}
+	if cfg.TelemetryEnabled != nil && *cfg.TelemetryEnabled {
+		tel.Configure(true, cfg.DeviceID, telemetry.Version)
+	}
+	defer tel.Flush()
+
 	// One shared store across goroutines (its *sql.DB is concurrency-safe;
 	// the daemon shares one the same way).
 	st, err := store.Open(paths.StateDB())
@@ -75,7 +83,7 @@ func runE(_ *cobra.Command, args []string) error {
 		wg.Add(1)
 		go func(sp ticketSpec) {
 			defer wg.Done()
-			out := runOne(sp, cfg, repo, st)
+			out := runOne(sp, cfg, repo, st, tel)
 			if out.Err != nil || out.State == store.StateFailed {
 				mu.Lock()
 				failed++
@@ -158,9 +166,11 @@ func dedupeSpecs(specs []ticketSpec) []ticketSpec {
 // runOne executes the full pipeline for a single resolved ticket. It never
 // bubbles an error up the Go path: it returns an Outcome so sibling tickets in
 // a parallel run keep going.
-func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Store) runner.Outcome {
+func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Store, tel *telemetry.Client) runner.Outcome {
 	logf, closeLog := newLogger(sp.ticket)
 	defer closeLog()
+	start := time.Now()
+	tel.Track("run_started", map[string]any{"local": sp.local})
 
 	summary, desc := sp.summary, sp.desc
 	var jc *jira.Client
@@ -222,6 +232,12 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	default:
 		logf("[%s] ended in state: %s", sp.ticket, out.State)
 	}
+	tel.Track("run_completed", map[string]any{
+		"outcome":    out.State,
+		"duration_s": int(time.Since(start).Seconds()),
+		"has_error":  out.Err != nil,
+		"local":      sp.local,
+	})
 	return out
 }
 

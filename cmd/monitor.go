@@ -19,6 +19,7 @@ import (
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 	"github.com/andresuarezz26/magneton/internal/store"
+	"github.com/andresuarezz26/magneton/internal/telemetry"
 )
 
 // stoppedAfter is how long a running-state session can be idle (no log/state
@@ -46,15 +47,31 @@ func launchHub() error {
 
 	// Best-effort Jira client for answer-and-resume; nil if not configured.
 	var jc *jira.Client
-	if cfg, cerr := config.Load(); cerr == nil && cfg.JiraBaseURL != "" {
+	cfg, cfgErr := config.Load()
+	if cfgErr == nil && cfg.JiraBaseURL != "" {
 		jc = jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
 	}
+
+	tel := &telemetry.Client{}
+	defer tel.Flush()
+
+	initialView := viewDashboard
+	if cfgErr == nil && cfg.TelemetryEnabled != nil {
+		if *cfg.TelemetryEnabled {
+			tel.Configure(true, cfg.DeviceID, telemetry.Version)
+			tel.Track("tui_opened", nil)
+		}
+	} else if cfgErr == nil {
+		// Consent not yet given — show the consent screen first.
+		initialView = viewConsent
+	}
+
 	self, _ := os.Executable()
 	if self == "" {
 		self = "magneton"
 	}
 
-	m := monitorModel{store: st, jira: jc, selfPath: self}
+	m := monitorModel{store: st, jira: jc, tel: tel, selfPath: self, view: initialView}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -164,6 +181,7 @@ func stateLabel(s store.Session) string {
 type monitorModel struct {
 	store       *store.Store
 	jira        *jira.Client
+	tel         *telemetry.Client
 	selfPath    string
 	groups      []*group
 	flat        []store.Session
@@ -200,6 +218,12 @@ type answerDoneMsg struct {
 
 // cancelDoneMsg is returned once an agent has been stopped + cleaned up.
 type cancelDoneMsg struct{ ticket string }
+
+// consentDoneMsg carries the result of the telemetry consent save.
+type consentDoneMsg struct {
+	enabled  bool
+	deviceID string
+}
 
 type tickMsg time.Time
 
@@ -278,6 +302,14 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		return m, nil
+	case consentDoneMsg:
+		m.tel.Configure(msg.enabled, msg.deviceID, telemetry.Version)
+		if msg.enabled {
+			m.tel.Track("tui_opened", nil)
+			m.notice = "telemetry enabled — thanks for helping!"
+		}
+		m.view = viewDashboard
+		return m, nil
 	case runLaunchedMsg:
 		if msg.err != nil {
 			m.notice = "run failed: " + msg.err.Error()
@@ -318,6 +350,8 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateConfirming(msg)
 	}
 	switch m.view {
+	case viewConsent:
+		return m.updateConsent(msg)
 	case viewPalette:
 		return m.updatePalette(msg)
 	case viewRunInput:
@@ -474,6 +508,48 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 	}
 }
 
+// ---- telemetry consent -----------------------------------------------------
+
+func (m monitorModel) updateConsent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "y":
+		return m, func() tea.Msg { return applyConsent(true) }
+	case "n", "esc", "q":
+		return m, func() tea.Msg { return applyConsent(false) }
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func applyConsent(enabled bool) tea.Msg {
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	cfg.TelemetryEnabled = &enabled
+	if enabled && cfg.DeviceID == "" {
+		cfg.DeviceID = config.GenerateDeviceID()
+	}
+	_ = config.Save(cfg)
+	return consentDoneMsg{enabled: enabled, deviceID: cfg.DeviceID}
+}
+
+func (m monitorModel) renderConsent(w int) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("  Help improve magneton?") + "\n\n")
+	b.WriteString("  Share anonymous usage data so we can understand how the tool is used.\n")
+	b.WriteString("  We never collect ticket content, file paths, or personal information.\n\n")
+	b.WriteString("  What gets shared:\n")
+	b.WriteString(dimStyle.Render("    • which commands run (run, doctor, etc.)") + "\n")
+	b.WriteString(dimStyle.Render("    • run outcome (success / failed / needs-human)") + "\n")
+	b.WriteString(dimStyle.Render("    • OS type and magneton version") + "\n\n")
+	b.WriteString("  " + ctaStyle.Render(" Y ") + "  yes — help make magneton better\n\n")
+	b.WriteString("  " + dimStyle.Render("N") + "  no thanks\n")
+	return b.String()
+}
+
 // ---- view ------------------------------------------------------------------
 
 var (
@@ -514,6 +590,8 @@ func (m monitorModel) View() string {
 	// Body for the active view; the action bar is appended at the bottom by frame.
 	var body string
 	switch m.view {
+	case viewConsent:
+		body = m.renderConsent(w)
 	case viewPalette:
 		body = m.renderPalette(w)
 	case viewRunInput:
@@ -538,6 +616,8 @@ func (m monitorModel) View() string {
 	footer := ""
 	if m.view == viewDashboard && !m.answering && m.confirming == "" {
 		footer = dimStyle.Render("  ↑↓ select · enter: choose · : commands · q: quit")
+	} else if m.view == viewConsent {
+		footer = dimStyle.Render("  y: share · n: skip")
 	} else if m.confirming != "" {
 		footer = dimStyle.Render("  y: yes · n: no")
 	} else if m.answering {
