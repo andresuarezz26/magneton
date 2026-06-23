@@ -51,7 +51,7 @@ func launchHub() error {
 	}
 	self, _ := os.Executable()
 	if self == "" {
-		self = "agent"
+		self = "magneton"
 	}
 
 	m := monitorModel{store: st, jira: jc, selfPath: self}

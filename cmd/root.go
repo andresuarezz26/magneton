@@ -11,7 +11,7 @@ import (
 var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:           "agent",
+	Use:           "magneton",
 	Short:         "magneton — autonomous Android ticket → PR agent",
 	Version:       version,
 	SilenceUsage:  true,

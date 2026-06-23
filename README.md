@@ -2,7 +2,7 @@
 
 **Android development workflow automation.** magneton turns Android tickets into
 reviewed PRs autonomously, and its home is a **terminal dashboard (TUI)**: run
-`agent` with no arguments and you get a live view of every agent plus one-key
+`magneton` with no arguments and you get a live view of every agent plus one-key
 actions to start, watch, unblock, and ship work — without leaving the screen.
 
 Under the hood, for each ticket it provisions an isolated git worktree, drives a
@@ -15,14 +15,14 @@ Jira tickets through their status workflow, and coordinating emulator resources
 across concurrent tasks.
 
 The TUI is the friendly front; every action is also a plain subcommand
-(`agent run`, `agent doctor`, …) for scripts and CI.
+(`magneton run`, `magneton doctor`, …) for scripts and CI.
 
 ## Status
 
-- **Phase 1 — complete:** `agent run <TICKET>` — the thin end-to-end loop, including bounded self-correct retries.
-- **Phase 2 — complete:** background daemon (`agent start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `agent status` (+ `--watch`), Jira JQL polling, Jira status transitions, desktop notifications.
-- **Phase 3 — complete:** interactive `agent init` wizard with connectivity check, `--version`, GoReleaser + Homebrew packaging.
-- **TUI hub — complete:** bare `agent` opens a live dashboard that is the home base for everything — start/answer/resume/stop agents, open the worktree in Android Studio or resume the session in Claude Code, run doctor, edit config, and control the daemon, all from one screen.
+- **Phase 1 — complete:** `magneton run <TICKET>` — the thin end-to-end loop, including bounded self-correct retries.
+- **Phase 2 — complete:** background daemon (`magneton start`/`stop`), SQLite state with atomic claiming, concurrency-capped fleet, `magneton status` (+ `--watch`), Jira JQL polling, Jira status transitions, desktop notifications.
+- **Phase 3 — complete:** interactive `magneton init` wizard with connectivity check, `--version`, GoReleaser + Homebrew packaging.
+- **TUI hub — complete:** bare `magneton` opens a live dashboard that is the home base for everything — start/answer/resume/stop agents, open the worktree in Android Studio or resume the session in Claude Code, run doctor, edit config, and control the daemon, all from one screen.
 
 ## How it works
 
@@ -89,7 +89,7 @@ The implement allowlist is configurable via `allowed_tools`; widening it to incl
 | Path | Responsibility |
 |---|---|
 | `main.go` | entrypoint |
-| `cmd/` | Cobra CLI (`agent`): `init`, `run`, `doctor`, `logs`, `status`/`start`/`stop` |
+| `cmd/` | Cobra CLI (`magneton`): `init`, `run`, `doctor`, `logs`, `status`/`start`/`stop` |
 | `internal/config` | `~/.agent/config.toml` loader |
 | `internal/secrets` | OS keychain (`security`) + `$DROIDPILOT_*` env fallback |
 | `internal/jira` | Jira Cloud read, comment, status transitions |
@@ -111,21 +111,21 @@ The implement allowlist is configurable via `allowed_tools`; widening it to incl
 
 Open Claude Code and paste this. Claude does the rest:
 
-> Install magneton: `git clone --single-branch --depth 1 https://github.com/andresuarezz26/magneton.git ~/.magneton && cd ~/.magneton && ./setup` — then run `agent init` to configure my first repo and check connectivity.
+> Install magneton: `git clone --single-branch --depth 1 https://github.com/andresuarezz26/magneton.git ~/.magneton && cd ~/.magneton && ./setup` — then run `magneton init` to configure my first repo and check connectivity.
 
-Claude clones the repo, builds the binary, puts it in `~/.local/bin/agent`, and walks you through `agent init`. The whole thing takes under a minute.
+Claude clones the repo, builds the binary, puts it in `~/.local/bin/magneton`, and walks you through `magneton init`. The whole thing takes under a minute.
 
 ### Manual install
 
 ```bash
 git clone https://github.com/andresuarezz26/magneton
 cd magneton
-make install          # builds and copies to ~/.local/bin/agent
+make install          # builds and copies to ~/.local/bin/magneton
 ```
 
 Or just build in-place:
 ```bash
-make build            # → ./agent in the current directory
+make build            # → ./magneton in the current directory
 ```
 
 ### Prerequisites
@@ -140,7 +140,7 @@ make build            # → ./agent in the current directory
 **Optional** — add only what you actually use:
 
 - **`gh`** (authenticated) — only to open the pull request. `--dry-run` skips push + PR, so the whole loop works without it.
-- **Jira** (site URL + email + API token) — only to fetch tickets by key (`agent run KAN-4`). For `.md` files Jira is never touched.
+- **Jira** (site URL + email + API token) — only to fetch tickets by key (`magneton run KAN-4`). For `.md` files Jira is never touched.
 - **Android SDK** — only to build/test an actual Android project.
 - **An AVD + `adb`/emulator** — only for instrumented (on-device) tests. Without one, those tasks fall back to unit tests.
 - **`ANTHROPIC_API_KEY`** — only if you're *not* using a logged-in `claude` session.
@@ -153,9 +153,9 @@ and (unless `--dry-run`) opens a PR.
 
 ```bash
 # 1. One-time: point magneton at your repo + how to build it.
-#    `agent init` asks for Jira too, but you can leave those blank — only the
+#    `magneton init` asks for Jira too, but you can leave those blank — only the
 #    repo path and compile/test commands matter for local .md runs.
-agent init
+magneton init
 
 # 2. Write a ticket as markdown (the first # heading is the title).
 cat > add-logout.md <<'EOF'
@@ -165,28 +165,28 @@ Wire it to AuthRepository.logout() and navigate back to the login screen.
 EOF
 
 # 3. Run it. --dry-run does everything except push + PR (no `gh` needed).
-agent run ./add-logout.md --dry-run
+magneton run ./add-logout.md --dry-run
 
 # 4. See what it produced.
 git -C ~/.agent/worktrees/ADD-LOGOUT diff
 ```
 
 Drop `--dry-run` (with `gh` authenticated and a pushable `origin`) to open the PR.
-Run several at once: `agent run a.md b.md c.md`. Then open the dashboard with
-`agent` to watch, answer, resume, or stop them.
+Run several at once: `magneton run a.md b.md c.md`. Then open the dashboard with
+`magneton` to watch, answer, resume, or stop them.
 
 **Want it to pull tickets for you instead?** Set up Jira (below) and run by key:
-`agent run KAN-123`. **Need real on-device UI tests?** Add an AVD (see
+`magneton run KAN-123`. **Need real on-device UI tests?** Add an AVD (see
 [Android Emulator](#android-emulator)). Both are optional.
 
 ## Setup
 
-Run **`agent`** (the hub) and pick **Setup wizard** from the menu (`:`), or run
-**`agent init`** directly. On a terminal it launches an interactive wizard (prompts
+Run **`magneton`** (the hub) and pick **Setup wizard** from the menu (`:`), or run
+**`magneton init`** directly. On a terminal it launches an interactive wizard (prompts
 for Jira URL/email, repo path, build/test commands, and tokens — stored in the
 OS keychain — then runs a connectivity check). When stdin isn't a TTY (CI), it
 scaffolds a commented `~/.agent/config.toml` to edit by hand. Once configured, just
-run **`agent`** and start a ticket from the dashboard.
+run **`magneton`** and start a ticket from the dashboard.
 
 > **Only the repo path and compile/test commands are required.** Leave the Jira
 > fields blank to run from `.md` files; fill them in only when you want magneton to
@@ -206,7 +206,7 @@ open -t ~/.agent/config.toml        # macOS — opens in the default text editor
 
 To **check that everything is connected** after editing:
 ```bash
-agent doctor
+magneton doctor
 ```
 This shows the config path, tests Jira/git/claude/gh connectivity, and verifies
 the Android SDK + AVD setup. No prompts — safe to run at any time.
@@ -249,12 +249,12 @@ accordingly:
 jira_in_progress_status = "En progreso"   # Spanish example
 ```
 
-Run `agent doctor` after changing this — if the transition fails, the doctor
+Run `magneton doctor` after changing this — if the transition fails, the doctor
 output will list the available status names for your board.
 
 ### Secrets
 
-Secrets are stored in the macOS keychain (set during `agent init`) or as
+Secrets are stored in the macOS keychain (set during `magneton init`) or as
 environment variables:
 
 ```bash
@@ -283,12 +283,12 @@ You don't configure this — it's a per-ticket decision made at plan time.
 1. **Boot in parallel.** When a task needs the emulator, boot starts immediately after the plan stage — in parallel with the implement stage. By the time Claude finishes writing code, the emulator is usually already warm.
 2. **Shared resource.** The emulator is coordinated via SQLite. If two concurrent tasks both need it, one runs tests while the other waits — no two processes start simultaneously.
 3. **Already running?** If an emulator is already connected (e.g., left open from Android Studio), it is reused without restarting.
-4. **Idle shutdown.** The emulator stays warm between tasks and shuts down automatically after `emulator_idle_timeout` minutes of inactivity, or when `agent stop` is called.
+4. **Idle shutdown.** The emulator stays warm between tasks and shuts down automatically after `emulator_idle_timeout` minutes of inactivity, or when `magneton stop` is called.
 
 To inspect the emulator's current state:
 ```bash
 adb devices        # shows connected emulators
-agent doctor       # shows emulator/AVD status
+magneton doctor       # shows emulator/AVD status
 ```
 
 To open the worktree for a ticket in Android Studio (to inspect what the agent changed):
@@ -318,8 +318,8 @@ android_sdk_path = "~/Library/Android/sdk"
 
 ### The hub (the default — TUI-first)
 
-Run **`agent`** with no arguments and you land in the hub: a live dashboard that is
-the home base for everything. (`agent monitor`/`agent top` open the same screen.)
+Run **`magneton`** with no arguments and you land in the hub: a live dashboard that is
+the home base for everything. (`magneton monitor`/`magneton top` open the same screen.)
 
 ```
 magneton · 6 agents · 2 need you      20:49:28  ·  ● daemon pid 41021
@@ -354,40 +354,40 @@ magneton · 6 agents · 2 need you      20:49:28  ·  ● daemon pid 41021
 Every action maps to a subcommand, so the same work is scriptable for CI:
 
 ```bash
-agent init                     # scaffold config + run connectivity check
-agent doctor                   # check config path + connectivity (no prompts)
+magneton init                     # scaffold config + run connectivity check
+magneton doctor                   # check config path + connectivity (no prompts)
 
-agent run PROJ-123             # run one Jira ticket end-to-end
-agent run PROJ-123 --dry-run   # everything except push + PR (safe first run)
-agent run PROJ-123 --resume    # after a manual fix: re-gate the existing worktree, then PR
-agent logs PROJ-123            # print the session log
+magneton run PROJ-123             # run one Jira ticket end-to-end
+magneton run PROJ-123 --dry-run   # everything except push + PR (safe first run)
+magneton run PROJ-123 --resume    # after a manual fix: re-gate the existing worktree, then PR
+magneton logs PROJ-123            # print the session log
 
 # No Jira required — point it at local markdown files:
-agent run ticket.md                        # one local ticket, no Jira
-agent run feat-a.md feat-b.md feat-c.md    # several at once, in parallel
+magneton run ticket.md                        # one local ticket, no Jira
+magneton run feat-a.md feat-b.md feat-c.md    # several at once, in parallel
 
 # Unattended fleet:
-agent start                    # poll Jira and run sessions (foreground)
-agent start --once             # poll one cycle, run claimed tickets, then exit
-agent status                   # aligned table of every session
-agent status --watch           # live-refreshing view
-agent stop                     # graceful shutdown (drains in-flight sessions)
+magneton start                    # poll Jira and run sessions (foreground)
+magneton start --once             # poll one cycle, run claimed tickets, then exit
+magneton status                   # aligned table of every session
+magneton status --watch           # live-refreshing view
+magneton stop                     # graceful shutdown (drains in-flight sessions)
 ```
 
 ### Local files instead of Jira
 
-You don't need Jira to use magneton. Pass one or more file paths to `agent run`
+You don't need Jira to use magneton. Pass one or more file paths to `magneton run`
 and each is treated as a ticket:
 
 ```bash
-agent run ./tickets/add-logout-button.md ./tickets/fix-crash.md
+magneton run ./tickets/add-logout-button.md ./tickets/fix-crash.md
 ```
 
 - **Title + body.** The first markdown `# H1` is the ticket summary (or the first
   non-blank line if there's no H1); everything after it is the description handed
   to the agent.
 - **Ticket id.** Derived from the filename: `add-logout-button.md` → `ADD-LOGOUT-BUTTON`,
-  used for the worktree, branch, log file, and `agent status`. Same-basename files
+  used for the worktree, branch, log file, and `magneton status`. Same-basename files
   in one run are disambiguated with a `-2`/`-3` suffix.
 - **Parallelism.** Multiple args run concurrently, capped at `concurrency` from your
   config (default 3). Each ticket gets its own worktree, branch, and `<id>.log`;
@@ -397,7 +397,7 @@ agent run ./tickets/add-logout-button.md ./tickets/fix-crash.md
   questions print to the terminal and the per-ticket log instead. Answer by editing
   the `.md` and re-running (same stop-and-re-run flow as Jira).
 
-You can also mix Jira keys and files in one invocation: `agent run PROJ-1 todo.md`.
+You can also mix Jira keys and files in one invocation: `magneton run PROJ-1 todo.md`.
 
 ### The plan + questions workflow
 
@@ -407,7 +407,7 @@ has questions or blockers, the comment explains what's needed:
 > 🤖 *magneton has questions before starting [PROJ-123]*
 >
 > *Please update the ticket description* with your answers, then re-run:
-> `agent run PROJ-123`
+> `magneton run PROJ-123`
 
 **What to do:** edit the Jira ticket **description** to answer the questions (don't
 reply in comments — magneton reads the description). Then re-run the command shown.
@@ -424,14 +424,14 @@ open -a "Android Studio" ~/.agent/worktrees/PROJ-123
 
 **Fix it by hand, then resume** — magneton keeps *your* changes, re-runs the gate
 on them, and (if green) commits + opens the PR. It does **not** re-plan or let the
-agent touch your fix:
+magneton touch your fix:
 
 ```bash
-agent run PROJ-123 --resume
+magneton run PROJ-123 --resume
 ```
 
 (In the TUI: select the ticket, `o` to open the worktree, fix it, then `R` to
-resume.) A plain `agent run PROJ-123` (no `--resume`) starts over from scratch and
+resume.) A plain `magneton run PROJ-123` (no `--resume`) starts over from scratch and
 **discards** uncommitted worktree changes — use `--resume` to keep a manual fix.
 
 ### Safety rails
@@ -449,7 +449,7 @@ Runtime data lives under `~/.agent/`: `config.toml`, `worktrees/<ticket>/`,
 ### 1. Automated (no setup)
 
 ```bash
-go build -o agent .
+go build -o magneton .
 go vet ./...
 go test ./...
 ```
@@ -457,7 +457,7 @@ go test ./...
 ### 2. Full loop, no Jira / no cloud (`--local`)
 
 ```bash
-go build -o agent .
+go build -o magneton .
 
 ROOT=$(mktemp -d); ORIGIN="$ROOT/origin.git"; WORK="$ROOT/app"
 git init -q --bare "$ORIGIN"; git init -q "$WORK"
@@ -476,7 +476,7 @@ compile = "true"
 test    = 'test "\$(cat hello.txt 2>/dev/null)" = "hello world"'
 EOF
 
-./agent run HELLO-1 --local \
+./magneton run HELLO-1 --local \
   --title "Create hello.txt containing exactly: hello world" --dry-run
 ```
 
@@ -497,7 +497,7 @@ same Claude session and route to `needs-you` after exhausting retries.
 
 **1 — Configure:**
 ```bash
-agent init
+magneton init
 # Jira base URL  → https://YOURORG.atlassian.net
 # Jira email     → you@yourorg.com
 # Repository     → /abs/path/to/android-repo
@@ -513,27 +513,27 @@ agent init
 
 **3 — Single-ticket dry run first (no PR, no Jira writes):**
 ```bash
-agent run PROJ-123 --dry-run
+magneton run PROJ-123 --dry-run
 git -C ~/.agent/worktrees/PROJ-123 diff
-agent logs PROJ-123
+magneton logs PROJ-123
 ```
 
 **4 — Real single ticket (opens a PR + comments on the ticket):**
 ```bash
-agent run PROJ-123
+magneton run PROJ-123
 ```
 
 **5 — Exercise the daemon for one cycle:**
 ```bash
-agent start --once     # claims matching tickets, runs them, then exits
-agent status
+magneton start --once     # claims matching tickets, runs them, then exits
+magneton status
 ```
 
 **6 — Leave it running unattended:**
 ```bash
-agent start &
-agent status --watch
-agent stop
+magneton start &
+magneton status --watch
+magneton stop
 ```
 
 > Tip: keep `concurrency` low (1–2) and `max_budget_usd` modest for the first

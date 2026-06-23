@@ -3,11 +3,11 @@ LDFLAGS := -s -w -X github.com/andresuarezz26/magneton/cmd.version=$(VERSION)
 
 .PHONY: build install test vet lint snapshot clean
 
-build: ## build the `agent` binary
-	go build -ldflags "$(LDFLAGS)" -o agent .
+build: ## build the `magneton` binary
+	go build -ldflags "$(LDFLAGS)" -o magneton .
 
-install: ## build and install to ~/.local/bin/agent
-	go build -ldflags "$(LDFLAGS)" -o $(HOME)/.local/bin/agent .
+install: ## build and install to ~/.local/bin/magneton
+	go build -ldflags "$(LDFLAGS)" -o $(HOME)/.local/bin/magneton .
 
 test: ## run tests
 	go test ./...
@@ -19,4 +19,4 @@ snapshot: ## local release build (no publish) — requires goreleaser
 	goreleaser release --snapshot --clean
 
 clean:
-	rm -rf agent dist
+	rm -rf magneton dist

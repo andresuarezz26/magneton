@@ -34,8 +34,8 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 echo "Building magneton…"
-go build -ldflags "-s -w" -o "$INSTALL_DIR/agent" .
-echo "Installed → $INSTALL_DIR/agent"
+go build -ldflags "-s -w" -o "$INSTALL_DIR/magneton" .
+echo "Installed → $INSTALL_DIR/magneton"
 
 # ── PATH hint ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ fi
 
 echo ""
 echo "Done. Next step:"
-echo "  agent init     # configure your repo and check connectivity"
+echo "  magneton init     # configure your repo and check connectivity"
 echo ""
 echo "Or open the dashboard:"
-echo "  agent          # live TUI hub (run tickets, watch progress, answer questions)"
+echo "  magneton       # live TUI hub (run tickets, watch progress, answer questions)"
