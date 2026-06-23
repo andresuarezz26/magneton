@@ -7,7 +7,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// repoLocks serializes CreateWorktree calls per repo path. git worktree add
+// and git fetch both write to .git/config and can't run concurrently on the
+// same repo without hitting "could not lock config file .git/config".
+var repoLocks sync.Map // map[string]*sync.Mutex
+
+func repoLock(repo string) *sync.Mutex {
+	v, _ := repoLocks.LoadOrStore(repo, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
 
 func run(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
@@ -34,7 +45,12 @@ func DefaultBranch(repo string) string {
 
 // CreateWorktree fetches origin and adds a fresh worktree on a new branch off
 // origin/<base>. A stale worktree at the same path is removed first.
+// The call is serialized per repo to avoid concurrent writes to .git/config.
 func CreateWorktree(repo, worktreeDir, branch, base string) error {
+	mu := repoLock(repo)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if _, err := run(repo, "fetch", "origin", "--prune"); err != nil {
 		return err
 	}
