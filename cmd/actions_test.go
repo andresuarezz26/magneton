@@ -76,7 +76,7 @@ func TestAgentActionsStoppedNoWorktree(t *testing.T) {
 
 func TestPaletteItemsIncludeGlobals(t *testing.T) {
 	t.Setenv("MAGNETON_HOME", t.TempDir()) // no pidfile → daemon stopped
-	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}, cursor: 1}
+	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "awaiting-answer"}}, cursor: 2}
 	ids := itemIDs(m.paletteItems())
 	for _, want := range []string{"answer", "run", "doctor", "config", "setup", "daemon-start", "quit"} {
 		if !ids[want] {
@@ -95,7 +95,7 @@ func TestDoActionTransitions(t *testing.T) {
 	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunInput {
 		t.Error("run → run-input view")
 	}
-	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}, cursor: 1}
+	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}, cursor: 2}
 	if mm, _ := m.doAction("stop"); mm.(monitorModel).confirming != "K1" {
 		t.Error("stop → confirming set to the selected ticket")
 	}

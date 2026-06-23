@@ -8,11 +8,13 @@ import (
 )
 
 // formField is one editable line in a form. secret fields render masked and are
-// meant for keychain storage, never the config file.
+// meant for keychain storage, never the config file. options turns the field
+// into a cycle-picker (left/right arrows) instead of free text.
 type formField struct {
-	label  string
-	value  string
-	secret bool
+	label   string
+	value   string
+	secret  bool
+	options []string
 }
 
 // formModel is a minimal hand-rolled multi-field form (no bubbles dependency).
@@ -25,12 +27,48 @@ type formModel struct {
 	submit func(fields []formField) tea.Msg
 }
 
-func (f *formModel) typeRunes(s string) { f.fields[f.focus].value += s }
+func (f *formModel) typeRunes(s string) {
+	if len(f.fields[f.focus].options) > 0 {
+		return
+	}
+	f.fields[f.focus].value += s
+}
 
 func (f *formModel) backspace() {
+	if len(f.fields[f.focus].options) > 0 {
+		return
+	}
 	if r := []rune(f.fields[f.focus].value); len(r) > 0 {
 		f.fields[f.focus].value = string(r[:len(r)-1])
 	}
+}
+
+func (f *formModel) cycleNext() {
+	fld := &f.fields[f.focus]
+	if len(fld.options) == 0 {
+		return
+	}
+	for i, o := range fld.options {
+		if o == fld.value {
+			fld.value = fld.options[(i+1)%len(fld.options)]
+			return
+		}
+	}
+	fld.value = fld.options[0]
+}
+
+func (f *formModel) cyclePrev() {
+	fld := &f.fields[f.focus]
+	if len(fld.options) == 0 {
+		return
+	}
+	for i, o := range fld.options {
+		if o == fld.value {
+			fld.value = fld.options[(i-1+len(fld.options))%len(fld.options)]
+			return
+		}
+	}
+	fld.value = fld.options[0]
 }
 
 func (f *formModel) next() {
@@ -57,12 +95,22 @@ func (f *formModel) render(w int) string {
 		if fld.secret {
 			val = strings.Repeat("•", len([]rune(fld.value)))
 		}
-		line := fmt.Sprintf("  %-20s %s", fld.label, val)
-		if i == f.focus {
-			line = selStyle.Render(line + "▌")
+		var line string
+		if len(fld.options) > 0 {
+			inner := fmt.Sprintf("  %-20s ◀ %s ▶", fld.label, val)
+			if i == f.focus {
+				line = selStyle.Render(inner)
+			} else {
+				line = inner
+			}
+		} else {
+			line = fmt.Sprintf("  %-20s %s", fld.label, val)
+			if i == f.focus {
+				line = selStyle.Render(line + "▌")
+			}
 		}
 		b.WriteString(truncate(line, w) + "\n")
 	}
-	b.WriteString("\n  " + dimStyle.Render("tab/↑↓ move · type to edit · enter save · esc cancel"))
+	b.WriteString("\n  " + dimStyle.Render("tab/↑↓ move · ←→ cycle options · type to edit · enter save · esc cancel"))
 	return b.String()
 }

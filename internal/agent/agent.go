@@ -119,7 +119,12 @@ func parseStream(r io.Reader, logf func(string, ...interface{})) string {
 		switch ev["type"] {
 		case "system":
 			if ev["subtype"] == "init" {
-				logf("  • session %s started", short(sessionID))
+				model, _ := ev["model"].(string)
+				if model != "" {
+					logf("  • session %s started · model:%s", short(sessionID), model)
+				} else {
+					logf("  • session %s started", short(sessionID))
+				}
 			}
 		case "assistant":
 			logAssistant(ev, logf)

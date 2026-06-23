@@ -161,16 +161,21 @@ func TestReloadGrouping(t *testing.T) {
 	if m.selected() != nil {
 		t.Error("cursor 0 (Start-new row) should select no agent")
 	}
-	// Cursor 1 selects the first agent.
+	// Cursor 1 is the Edit-config row → no agent selected.
 	m.cursor = 1
-	if m.selected() == nil || m.selected().Ticket != m.flat[0].Ticket {
-		t.Error("cursor 1 should select the first agent")
+	if m.selected() != nil {
+		t.Error("cursor 1 (Edit-config row) should select no agent")
 	}
-	// Clamp: max cursor is len(flat) (Start-new row + N agents).
+	// Cursor 2 selects the first agent.
+	m.cursor = 2
+	if m.selected() == nil || m.selected().Ticket != m.flat[0].Ticket {
+		t.Error("cursor 2 should select the first agent")
+	}
+	// Clamp: max cursor is len(flat)+1 (two pinned rows + N agents).
 	m.cursor = 99
 	m.reload()
-	if m.cursor != 5 {
-		t.Errorf("cursor not clamped: %d, want 5", m.cursor)
+	if m.cursor != 6 {
+		t.Errorf("cursor not clamped: %d, want 6", m.cursor)
 	}
 }
 

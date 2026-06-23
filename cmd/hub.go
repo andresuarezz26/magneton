@@ -248,6 +248,10 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.form.next()
 	case tea.KeyShiftTab, tea.KeyUp:
 		m.form.prev()
+	case tea.KeyLeft:
+		m.form.cyclePrev()
+	case tea.KeyRight:
+		m.form.cycleNext()
 	case tea.KeyBackspace:
 		m.form.backspace()
 	case tea.KeySpace:
@@ -260,6 +264,14 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// knownModels is the ordered list shown in the model picker (cheapest → most capable).
+var knownModels = []string{
+	"claude-haiku-4-5-20251001",
+	"claude-sonnet-4-6",
+	"claude-opus-4-8",
+	"claude-fable-5",
 }
 
 // configFields builds the editable (non-secret) field set from a config.
@@ -275,9 +287,9 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Branch", value: repo.Branch},
 		{label: "Compile", value: repo.Compile},
 		{label: "Test", value: repo.Test},
-		{label: "Model · plan", value: cfg.ModelPlan},
-		{label: "Model · implement", value: cfg.ModelImpl},
-		{label: "Model · review", value: cfg.ModelReview},
+		{label: "Model · plan", value: cfg.ModelPlan, options: knownModels},
+		{label: "Model · implement", value: cfg.ModelImpl, options: knownModels},
+		{label: "Model · review", value: cfg.ModelReview, options: knownModels},
 	}
 }
 

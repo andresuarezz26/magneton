@@ -233,18 +233,18 @@ func (m *monitorModel) reload() {
 	}
 	m.groups = groups
 	m.flat = flat
-	if m.cursor > len(flat) { // index 0 = the Start-new row; agents are 1..len(flat)
-		m.cursor = len(flat)
+	if m.cursor > len(flat)+1 { // 0=Start-new 1=Edit-config agents=2..len(flat)+1
+		m.cursor = len(flat) + 1
 	}
 }
 
-// selected returns the highlighted agent, or nil when the cursor is on the
-// "Start new ticket(s)" row (index 0). Agents occupy indexes 1..len(flat).
+// selected returns the highlighted agent, or nil when the cursor is on one of
+// the two pinned rows (0 = Start new, 1 = Edit config). Agents occupy 2..len(flat)+1.
 func (m *monitorModel) selected() *store.Session {
-	if m.cursor <= 0 || m.cursor > len(m.flat) {
+	if m.cursor <= 1 || m.cursor > len(m.flat)+1 {
 		return nil
 	}
-	return &m.flat[m.cursor-1]
+	return &m.flat[m.cursor-2]
 }
 
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -335,7 +335,7 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < len(m.flat) { // index 0 = Start-new row, so max is len(flat)
+		if m.cursor < len(m.flat)+1 { // 0=Start-new 1=Edit-config agents=2..len(flat)+1
 			m.cursor++
 		}
 	case ":":
@@ -349,10 +349,13 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m.doAction("claude")
 	case "enter":
-		if m.cursor == 0 { // the "Start new ticket(s)" row
+		if m.cursor == 0 {
 			return m.doAction("run")
 		}
-		return m.doAction("menu") // action menu for the selected agent
+		if m.cursor == 1 {
+			return m.doAction("config")
+		}
+		return m.doAction("menu")
 	case "a":
 		return m.doAction("answer")
 	case "x":
@@ -546,18 +549,23 @@ func (m monitorModel) View() string {
 // renderDashboardBody renders the triaged agent list + detail pane (no footer).
 func (m monitorModel) renderDashboardBody(w int) string {
 	var b strings.Builder
-	// Primary CTA as the first selectable row (index 0), above everything.
+	// Pinned rows: index 0 = Start new, index 1 = Edit config.
 	if m.cursor == 0 {
-		b.WriteString("  " + ctaSelStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press enter") + "\n\n")
+		b.WriteString("  " + ctaSelStyle.Render("＋ Start new ticket(s)") + dimStyle.Render("   press enter") + "\n")
 	} else {
-		b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + "\n\n")
+		b.WriteString("  " + ctaStyle.Render("＋ Start new ticket(s)") + "\n")
+	}
+	if m.cursor == 1 {
+		b.WriteString("  " + selStyle.Render(" ⚙  Edit config ") + dimStyle.Render("   press enter") + "\n\n")
+	} else {
+		b.WriteString("  " + dimStyle.Render(" ⚙  Edit config") + "\n\n")
 	}
 
 	if len(m.flat) == 0 {
 		b.WriteString("  " + dimStyle.Render("no agents running yet — select the row above and press enter to start one"))
 		return b.String()
 	}
-	idx := 1 // agents start at cursor index 1 (0 is the Start-new row)
+	idx := 2 // agents start at cursor index 2 (0=Start-new 1=Edit-config)
 	listLines := 0
 	for _, g := range m.groups {
 		if len(g.sessions) == 0 {
