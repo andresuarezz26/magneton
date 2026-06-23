@@ -192,6 +192,14 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 			}
 		}
 	}
+
+	// Append any locally-saved answers (from the TUI answer box) to the
+	// description so the agent sees them without a Jira round-trip.
+	if raw, err := os.ReadFile(paths.AnswerFor(sp.ticket)); err == nil && len(raw) > 0 {
+		desc = strings.TrimSpace(desc) + "\n\n---\nAnswers:\n" + strings.TrimSpace(string(raw))
+		_ = os.Remove(paths.AnswerFor(sp.ticket)) // consume once
+		logf("[%s] local answers injected into description", sp.ticket)
+	}
 	logf("[%s] %s", sp.ticket, summary)
 
 	// State store so `magneton status` reflects manual runs too.

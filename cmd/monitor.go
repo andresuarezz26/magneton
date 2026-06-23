@@ -438,33 +438,51 @@ func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submitAnswer writes the answer into the Jira description and relaunches the
-// agent so it resumes; its output streams to the log the monitor already tails.
+// submitAnswer saves the answer locally and relaunches the agent. No Jira API
+// calls: for .md tickets the answer is appended to the source file; for Jira
+// tickets it's written to ~/.agent/answers/<ticket>.md and the runner picks it
+// up before the plan stage. Everything stays inside the TUI.
 func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
-	jc, self := m.jira, m.selfPath
+	self, st := m.selfPath, m.store
 	return func() tea.Msg {
-		if jc == nil {
-			return answerDoneMsg{ticket: key, err: fmt.Errorf("no Jira configured (local .md answering not yet supported)")}
+		// Resolve the source: .md path (local ticket) or empty (Jira ticket).
+		var sourcePath string
+		if st != nil {
+			if sess, err := st.Get(key); err == nil && sess != nil {
+				sourcePath = sess.SourcePath
+			}
 		}
-		issue, err := jc.FetchIssue(key)
-		if err != nil {
-			return answerDoneMsg{ticket: key, err: err}
+
+		if sourcePath != "" {
+			// Local .md ticket: append answer to the file so the next run sees it.
+			raw, err := os.ReadFile(sourcePath)
+			if err != nil {
+				return answerDoneMsg{ticket: key, err: fmt.Errorf("read %s: %w", sourcePath, err)}
+			}
+			updated := strings.TrimSpace(string(raw)) + "\n\n---\nAnswers:\n" + answer
+			if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
+				return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
+			}
+			return launchAndReturn(key, self, sourcePath)
 		}
-		newDesc := strings.TrimSpace(issue.Description) +
-			"\n\n---\nAnswers (via magneton monitor):\n" + answer
-		if err := jc.SetDescription(key, newDesc); err != nil {
-			return answerDoneMsg{ticket: key, err: err}
+
+		// Jira ticket: write to a local answers sidecar; runner appends it to desc.
+		answerFile := paths.AnswerFor(key)
+		if err := os.WriteFile(answerFile, []byte(answer+"\n"), 0o644); err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("write answers file: %w", err)}
 		}
-		// Relaunch detached; output is discarded from this TUI but the run
-		// writes to ~/.agent/logs/<key>.log, which the monitor tails live.
-		c := exec.Command(self, "run", key)
-		c.Stdout, c.Stderr = nil, nil
-		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if err := c.Start(); err != nil {
-			return answerDoneMsg{ticket: key, err: err}
-		}
-		return answerDoneMsg{ticket: key}
+		return launchAndReturn(key, self, key)
 	}
+}
+
+func launchAndReturn(ticket, self, runArg string) tea.Msg {
+	c := exec.Command(self, "run", runArg)
+	c.Stdout, c.Stderr = nil, nil
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		return answerDoneMsg{ticket: ticket, err: err}
+	}
+	return answerDoneMsg{ticket: ticket}
 }
 
 // ---- view ------------------------------------------------------------------
