@@ -18,7 +18,7 @@ import (
 )
 
 // APIKey is set at build time. Empty = telemetry silently disabled.
-var APIKey = ""
+var APIKey = "phc_kLahCNQXkx7crJhj3f9Vt78gHJTWo9zizh9x2NDif6yb"
 
 // Version is set at build time (e.g. "0.1.0"). Falls back to "dev".
 var Version = "dev"
