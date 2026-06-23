@@ -268,13 +268,13 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // knownModels is the ordered list shown in the model picker (cheapest → most capable).
-// Both date formats are included: hyphen (claude.ai) and @ (enterprise accounts).
+// Uses Claude Code aliases — always resolves to the latest version of each tier,
+// works on both personal and enterprise accounts with no version string to maintain.
 var knownModels = []string{
-	"claude-haiku-4-5-20251001",
-	"claude-haiku-4-5@20251001",
-	"claude-sonnet-4-6",
-	"claude-opus-4-8",
-	"claude-fable-5",
+	"haiku",
+	"sonnet",
+	"opus",
+	"fable",
 }
 
 // configFields builds the editable (non-secret) field set from a config.

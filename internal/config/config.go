@@ -87,13 +87,13 @@ func (c *Config) applyDefaults() {
 		c.MaxBudgetUSD = 5
 	}
 	if c.ModelPlan == "" {
-		c.ModelPlan = "claude-haiku-4-5-20251001"
+		c.ModelPlan = "haiku"
 	}
 	if c.ModelImpl == "" {
-		c.ModelImpl = "claude-haiku-4-5-20251001"
+		c.ModelImpl = "haiku"
 	}
 	if c.ModelReview == "" {
-		c.ModelReview = "claude-haiku-4-5-20251001"
+		c.ModelReview = "haiku"
 	}
 	if c.AndroidSDKPath == "" {
 		if v := os.Getenv("ANDROID_HOME"); v != "" {
