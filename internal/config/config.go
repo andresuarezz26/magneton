@@ -86,15 +86,11 @@ func (c *Config) applyDefaults() {
 	if c.MaxBudgetUSD == 0 {
 		c.MaxBudgetUSD = 5
 	}
-	if c.ModelPlan == "" {
-		c.ModelPlan = "haiku"
-	}
-	if c.ModelImpl == "" {
-		c.ModelImpl = "haiku"
-	}
-	if c.ModelReview == "" {
-		c.ModelReview = "haiku"
-	}
+	// Models are intentionally left empty by default: an empty value makes the
+	// agent omit `--model`, so Claude Code uses whatever default the user/org has
+	// configured (via `claude`'s /model, respecting enterprise policy). Users can
+	// set per-stage overrides to any identifier their account allows (including
+	// non-Claude models on Bedrock/Vertex). Nothing is hardcoded here.
 	if c.AndroidSDKPath == "" {
 		if v := os.Getenv("ANDROID_HOME"); v != "" {
 			c.AndroidSDKPath = v

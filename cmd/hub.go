@@ -249,10 +249,6 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.form.next()
 	case tea.KeyShiftTab, tea.KeyUp:
 		m.form.prev()
-	case tea.KeyLeft:
-		m.form.cyclePrev()
-	case tea.KeyRight:
-		m.form.cycleNext()
 	case tea.KeyBackspace:
 		m.form.backspace()
 	case tea.KeySpace:
@@ -267,17 +263,14 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// knownModels is the ordered list shown in the model picker (cheapest → most capable).
-// Uses Claude Code aliases — always resolves to the latest version of each tier,
-// works on both personal and enterprise accounts with no version string to maintain.
-var knownModels = []string{
-	"haiku",
-	"sonnet",
-	"opus",
-	"fable",
-}
-
 // configFields builds the editable (non-secret) field set from a config.
+//
+// Models are free-text on purpose: the set of usable model identifiers depends
+// on the account (personal vs enterprise) and the org's policy, and Claude Code
+// fetches that list at runtime — there's no offline list magneton could show
+// without it going stale or offering models a company forbids. Leave a model
+// blank to inherit Claude Code's configured default; or type the exact id your
+// account allows (e.g. "sonnet", "claude-opus-4-8", or a Bedrock/Vertex id).
 func configFields(cfg *config.Config) []formField {
 	repo := config.Repo{}
 	if len(cfg.Repos) > 0 {
@@ -290,9 +283,9 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Branch", value: repo.Branch},
 		{label: "Compile", value: repo.Compile},
 		{label: "Test", value: repo.Test},
-		{label: "Model · plan", value: cfg.ModelPlan, options: knownModels},
-		{label: "Model · implement", value: cfg.ModelImpl, options: knownModels},
-		{label: "Model · review", value: cfg.ModelReview, options: knownModels},
+		{label: "Model · plan (blank = default)", value: cfg.ModelPlan},
+		{label: "Model · implement (blank = default)", value: cfg.ModelImpl},
+		{label: "Model · review (blank = default)", value: cfg.ModelReview},
 	}
 }
 
