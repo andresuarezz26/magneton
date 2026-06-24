@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,38 @@ func TestLoadLocalTicket(t *testing.T) {
 	}
 	if sp.summary != "Do the thing" {
 		t.Errorf("noH1: summary = %q", sp.summary)
+	}
+
+	// First H1 is a generic section header → skip it; title comes from the first
+	// real prose line, not "Description".
+	section := filepath.Join(dir, "PLEX-1.md")
+	if err := os.WriteFile(section, []byte("# Description\n\nUpdate tour_nav.xml to add destinations.\n\n# Acceptance Criteria\n\n- updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sp, err = loadLocalTicket(section)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.summary != "Update tour_nav.xml to add destinations." {
+		t.Errorf("section: summary = %q", sp.summary)
+	}
+	// Body keeps its structure (the "# Description" heading is not consumed).
+	if !strings.HasPrefix(sp.desc, "# Description") {
+		t.Errorf("section: body should retain structure, got %q", sp.desc)
+	}
+
+	// Long opening sentence is truncated to a sane title length.
+	long := filepath.Join(dir, "PLEX-2.md")
+	bigLine := "Update Compass/compass/src/main/res/navigation/tour_nav.xml to add all new tours fragment destinations and change the start destination"
+	if err := os.WriteFile(long, []byte("# Description\n\n"+bigLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sp, err = loadLocalTicket(long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(sp.summary)) > maxDerivedTitleLen+1 || !strings.HasSuffix(sp.summary, "…") {
+		t.Errorf("long: summary not truncated: %q (len %d)", sp.summary, len([]rune(sp.summary)))
 	}
 
 	// Empty file → error.
