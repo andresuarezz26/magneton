@@ -30,11 +30,17 @@ func worktreeExists(ticket string) bool {
 func agentActions(s store.Session) []paletteItem {
 	var items []paletteItem
 	hasWT := worktreeExists(s.Ticket)
+	active := store.IsActive(s.State)
 	stuck := s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s)
 	done := s.State == "review" || s.State == "merged" || s.State == "closed"
 
 	if s.State == "awaiting-answer" {
 		items = append(items, paletteItem{"answer", "Answer the questions", "reply, then the agent resumes"})
+	}
+	// Pause a live run: stop the agent but keep the worktree, dropping the ticket
+	// to NEEDS YOU so you can take over by hand (then Resume / Open a PR).
+	if active {
+		items = append(items, paletteItem{"pause", "Pause (move to NEEDS YOU)", "stop the running agent but keep the worktree so you can take over"})
 	}
 	if hasWT {
 		if stuck {
@@ -43,10 +49,13 @@ func agentActions(s store.Session) []paletteItem {
 				paletteItem{"ship", "Open a PR", "skip verification — commit + push + PR (when the gate itself is unreliable here)"},
 			)
 		}
-		items = append(items,
-			paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
-			paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"},
-		)
+		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
+		// "Open in Claude Code" resumes the agent's session. Only offer it when no
+		// run is active — otherwise the headless agent and this interactive session
+		// would both write to the same session on disk and diverge.
+		if !active {
+			items = append(items, paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"})
+		}
 	} else if stuck {
 		// Worktree is gone (stopped/cleaned, or it never built) — only a fresh run is possible.
 		items = append(items, paletteItem{"rerun", "Run again (fresh)", "no worktree left — start this ticket from scratch"})
@@ -142,6 +151,11 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 				arg = s.SourcePath
 			}
 			return m, m.launchRun(arg)
+		}
+	case "pause":
+		if s := m.selected(); s != nil {
+			m.notice = "pausing " + s.Ticket + " — moving to NEEDS YOU…"
+			return m, m.pauseAgent(*s)
 		}
 	case "stop":
 		if s := m.selected(); s != nil {

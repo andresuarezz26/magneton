@@ -219,6 +219,9 @@ type answerDoneMsg struct {
 // cancelDoneMsg is returned once an agent has been stopped + cleaned up.
 type cancelDoneMsg struct{ ticket string }
 
+// pauseDoneMsg is returned once a live run has been paused into NEEDS YOU.
+type pauseDoneMsg struct{ ticket string }
+
 // consentDoneMsg carries the result of the telemetry consent save.
 type consentDoneMsg struct {
 	enabled  bool
@@ -287,6 +290,10 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case cancelDoneMsg:
 		m.notice = "stopped " + msg.ticket + " — process killed, worktree removed"
+		m.reload()
+		return m, nil
+	case pauseDoneMsg:
+		m.notice = "paused " + msg.ticket + " — agent stopped, worktree kept (NEEDS YOU)"
 		m.reload()
 		return m, nil
 	case doctorDoneMsg:
@@ -422,6 +429,24 @@ func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirming = ""
 	}
 	return m, nil
+}
+
+// pauseAgent halts a live run: it kills the driving process (and its process
+// group, so the child claude stops too) but KEEPS the worktree, and drops the
+// session to NEEDS YOU so the human can take over by hand and later resume.
+func (m monitorModel) pauseAgent(s store.Session) tea.Cmd {
+	st := m.store
+	return func() tea.Msg {
+		if s.PID > 0 && pidAlive(s.PID) {
+			// Kill the whole process group first (TUI-launched runs are group
+			// leaders, so this also stops the child claude), then the pid itself as
+			// a fallback for runs not started as a group leader.
+			_ = syscall.Kill(-s.PID, syscall.SIGTERM)
+			_ = syscall.Kill(s.PID, syscall.SIGTERM)
+		}
+		_ = st.SetState(s.Ticket, store.StateNeedsYou, s.Retries)
+		return pauseDoneMsg{ticket: s.Ticket}
+	}
 }
 
 // cancelAgent kills the driving process (if alive), removes the worktree, and
