@@ -12,34 +12,32 @@ import (
 	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
-// Repo is one registered Android repository.
+// Repo is one registered Android repository. magneton no longer stores
+// build/test commands here — the agent discovers and runs verification itself
+// during the verify stage.
 type Repo struct {
-	Path          string `toml:"path"`
-	Branch        string `toml:"branch"`
-	Compile       string `toml:"compile"`
-	Test          string `toml:"test"`
-	ConnectedTest string `toml:"connected_test"`
-	Base          string `toml:"base"`
-	MaxRetries    int    `toml:"max_retries"`
+	Path   string `toml:"path"`
+	Branch string `toml:"branch"`
+	Base   string `toml:"base"`
 }
 
 // Config is the whole ~/.agent/config.toml.
 type Config struct {
-	JiraBaseURL  string  `toml:"jira_base_url"`
-	JiraEmail    string  `toml:"jira_email"`
-	PollInterval int     `toml:"poll_interval"`
-	Concurrency          int     `toml:"concurrency"`
-	AllowedTools         string  `toml:"allowed_tools"`
-	MaxBudgetUSD         float64 `toml:"max_budget_usd"`
-	ModelPlan            string  `toml:"model_plan"`
-	ModelImpl            string  `toml:"model_impl"`
-	ModelReview          string  `toml:"model_review"`
-	AVDName              string  `toml:"avd_name"`
-	AndroidSDKPath       string  `toml:"android_sdk_path"`
-	EmulatorIdleTimeout  int     `toml:"emulator_idle_timeout"`
-	TelemetryEnabled     *bool   `toml:"telemetry_enabled"`
-	DeviceID             string  `toml:"device_id"`
-	Repos                []Repo  `toml:"repo"`
+	JiraBaseURL         string  `toml:"jira_base_url"`
+	JiraEmail           string  `toml:"jira_email"`
+	PollInterval        int     `toml:"poll_interval"`
+	Concurrency         int     `toml:"concurrency"`
+	AllowedTools        string  `toml:"allowed_tools"`
+	MaxBudgetUSD        float64 `toml:"max_budget_usd"`
+	ModelPlan           string  `toml:"model_plan"`
+	ModelImpl           string  `toml:"model_impl"`
+	ModelReview         string  `toml:"model_review"`
+	AVDName             string  `toml:"avd_name"`
+	AndroidSDKPath      string  `toml:"android_sdk_path"`
+	EmulatorIdleTimeout int     `toml:"emulator_idle_timeout"`
+	TelemetryEnabled    *bool   `toml:"telemetry_enabled"`
+	DeviceID            string  `toml:"device_id"`
+	Repos               []Repo  `toml:"repo"`
 }
 
 // GenerateDeviceID returns a random UUID v4 string. Call once at consent time.
@@ -101,11 +99,6 @@ func (c *Config) applyDefaults() {
 	if c.EmulatorIdleTimeout == 0 {
 		c.EmulatorIdleTimeout = 30
 	}
-	for i := range c.Repos {
-		if c.Repos[i].ConnectedTest == "" {
-			c.Repos[i].ConnectedTest = "./gradlew connectedDebugAndroidTest"
-		}
-	}
 	if c.AllowedTools == "" {
 		// Scoped allowlist (Decision 16): file edits within the worktree plus the
 		// Gradle wrapper and read-only inspection commands — no arbitrary Bash, so
@@ -121,9 +114,6 @@ func (c *Config) applyDefaults() {
 	for i := range c.Repos {
 		r := &c.Repos[i]
 		r.Path = expand(r.Path)
-		if r.MaxRetries == 0 {
-			r.MaxRetries = 3
-		}
 		if r.Branch == "" {
 			r.Branch = "ai/{ticket}-{slug}"
 		}

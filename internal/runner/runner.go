@@ -78,7 +78,6 @@ func Run(t Task, h Hooks) Outcome {
 		"{slug}", slugify(t.Summary),
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(t.Ticket)
-	gradleHome := paths.GradleHomeFor(t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
 
 	// 1. Provision an isolated worktree (Decision 7).
@@ -123,22 +122,6 @@ func Run(t Task, h Hooks) Outcome {
 	}
 	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
 
-	// Resolve compile/test commands: config wins if set, otherwise use plan's discovered commands.
-	compileCmd := repo.Compile
-	if compileCmd == "" {
-		compileCmd = plan.CompileCmd
-	}
-	testCmd := repo.Test
-	if testCmd == "" {
-		testCmd = plan.TestCmd
-	}
-	if compileCmd != "" {
-		logf("[%s] compile: %s", t.Ticket, compileCmd)
-	}
-	if testCmd != "" {
-		logf("[%s] test:    %s", t.Ticket, testCmd)
-	}
-
 	// Start emulator in the background, concurrent with the implement stage.
 	// We do this right after reading the plan so boot time overlaps with Claude.
 	needsEmu := plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
@@ -182,7 +165,7 @@ func Run(t Task, h Hooks) Outcome {
 		Logf:         logf,
 	}
 	sessionID, runErr := agent.Run(
-		agent.BuildImplPrompt(t.Ticket, t.Summary, t.Description, plan, compileCmd, testCmd),
+		agent.BuildImplPrompt(t.Ticket, t.Summary, t.Description, plan),
 		implOpts)
 	if runErr != nil {
 		logf("[%s] (warn) implement stage exited: %v", t.Ticket, runErr)
@@ -241,8 +224,8 @@ func Run(t Task, h Hooks) Outcome {
 		logf("[%s] self-review: pass ✓", t.Ticket)
 	}
 
-	// 6. Build gate with bounded self-correct (Decision 4).
-	// Sync with emulator and acquire it before running the gate.
+	// 6. Verify. Sync with the emulator and acquire it first (the agent runs any
+	// instrumented tests against it).
 	if needsEmu {
 		logf("[%s] waiting for emulator…", t.Ticket)
 		if err := <-emulatorReady; err != nil {
@@ -262,50 +245,37 @@ func Run(t Task, h Hooks) Outcome {
 		}
 	}
 
-	activeTestCmd := testCmd
-	if needsEmu && repo.ConnectedTest != "" {
-		activeTestCmd = repo.ConnectedTest
+	// VERIFY — the agent discovers and runs this project's own build + tests
+	// itself (per-project Gradle setups and company build skills all work), fixes
+	// failures, and certifies the result in report.json. magneton trusts that
+	// verdict instead of running hardcoded Gradle commands. Because the agent's
+	// process inherits the real environment, this also sidesteps the isolated-Gradle
+	// TLS/cert failures the orchestrator-run gate hit on locked-down machines.
+	logf("[%s] stage:verify — agent will discover & run build + tests (emulator=%v)", t.Ticket, needsEmu)
+	vreport, verified, sid := verifyWithAgent(t, worktree, sessionID, needsEmu, true, anthropicKey, logf, setState)
+	if sid != "" {
+		sessionID = sid
+		saveSession(sessionID)
 	}
-	logf("[%s] gate will run: compile=%q test=%q emulator=%v", t.Ticket, compileCmd, activeTestCmd, needsEmu)
-
-	attempts := 1
-	gate := func() build.Result {
-		setState(store.StateBuilding, attempts-1)
-		if r := build.Step(worktree, gradleHome, compileCmd, "compile"); !r.OK {
-			return r
-		}
-		setState(store.StateTesting, attempts-1)
-		return build.Step(worktree, gradleHome, activeTestCmd, "test")
+	if vreport != nil {
+		report = vreport
 	}
-	for {
-		res := gate()
-		if res.OK {
-			logf("[%s] gate green ✓", t.Ticket)
-			break
+	if !verified {
+		reason := "the agent could not get the build and tests green."
+		if vreport != nil && strings.TrimSpace(vreport.VerifyLog) != "" {
+			reason = vreport.VerifyLog
 		}
-		logf("[%s] %s failed (attempt %d/%d)", t.Ticket, res.Phase, attempts, repo.MaxRetries)
-		if attempts >= repo.MaxRetries {
-			logf("[%s] needs-you: %s still red after %d attempts", t.Ticket, res.Phase, attempts)
-			setState(store.StateNeedsYou, attempts-1)
-			needsYouComment(fmt.Sprintf(
-				"The *%s* step failed after %d attempt(s) and the agent could not fix it automatically.\n\n*Last error (tail):*\n{code}\n%s\n{code}\n\nOpen the worktree in Android Studio to investigate:\n`open -a \"Android Studio\" %s`",
-				res.Phase, attempts, tail(res.Output, 1500), worktree,
-			))
-			return Outcome{State: store.StateNeedsYou}
-		}
-		attempts++
-		implOpts.ResumeID = sessionID
-		logf("[%s] feeding %s errors back to session", t.Ticket, res.Phase)
-		if sid, err := agent.Run(agent.BuildRetryPrompt(res.Phase, res.Output), implOpts); err != nil {
-			logf("[%s] (warn) claude retry exited: %v", t.Ticket, err)
-		} else if sid != "" {
-			sessionID = sid
-			saveSession(sessionID)
-		}
+		logf("[%s] needs-you: agent did not certify the build (verified=false)", t.Ticket)
+		setState(store.StateNeedsYou, 0)
+		needsYouComment(fmt.Sprintf(
+			"The agent ran this project's build and tests but could not certify them green:\n\n{code}\n%s\n{code}\n\nOpen the worktree in Android Studio to investigate:\n`open -a \"Android Studio\" %s`",
+			tail(reason, 1500), worktree))
+		return Outcome{State: store.StateNeedsYou}
 	}
+	logf("[%s] verify: agent certified build + tests green ✓", t.Ticket)
 
 	// 7-9. Commit, push, open PR (shared with the resume path).
-	return finishShip(t, h, worktree, branch, attempts, report, logf, setState)
+	return finishShip(t, h, worktree, branch, 1, report, logf, setState)
 }
 
 // finishShip commits any pending changes, and (unless dry-run) pushes the branch
@@ -410,6 +380,43 @@ func archiveReport(ticket string, r *agent.Report, logf func(string, ...interfac
 	}
 }
 
+// verifyWithAgent has the Claude session itself discover and run this project's
+// build + tests, then reads back the verdict the agent wrote into report.json.
+// When allowFix is true the agent may edit code to make it pass; when false
+// (resume) it only confirms a human's existing fix and must not edit. emulator
+// tells the agent whether instrumented tests can run. Returns the refreshed
+// report (nil if the agent left none), whether the agent certified success, and
+// the (possibly new) Claude session id.
+func verifyWithAgent(t Task, worktree, sessionID string,
+	emulator, allowFix bool, anthropicKey string,
+	logf func(string, ...interface{}), setState func(string, int)) (*agent.Report, bool, string) {
+
+	setState(store.StateBuilding, 0)
+	vOpts := agent.Options{
+		WorktreeDir:  worktree,
+		AllowedTools: t.Cfg.AllowedTools,
+		Model:        t.Cfg.ModelImpl,
+		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
+		AnthropicKey: anthropicKey,
+		ResumeID:     sessionID,
+		Logf:         logf,
+	}
+	newSession := sessionID
+	if sid, err := agent.Run(
+		agent.BuildVerifyPrompt(t.Ticket, t.Summary, emulator, allowFix),
+		vOpts); err != nil {
+		logf("[%s] (warn) verify stage exited: %v", t.Ticket, err)
+	} else if sid != "" {
+		newSession = sid
+	}
+	rep, err := agent.ReadReport(worktree)
+	if err != nil {
+		logf("[%s] (warn) verify produced no readable report.json (%v)", t.Ticket, err)
+		return nil, false, newSession
+	}
+	return rep, rep.Verified != nil && *rep.Verified, newSession
+}
+
 // worktreeReady reports whether dir is a usable git worktree (has its .git link).
 func worktreeReady(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
@@ -435,7 +442,6 @@ func resumeShip(t Task, h Hooks) Outcome {
 		"{slug}", slugify(t.Summary),
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(t.Ticket)
-	gradleHome := paths.GradleHomeFor(t.Ticket)
 
 	if !worktreeReady(worktree) {
 		setState(store.StateFailed, 0)
@@ -447,18 +453,10 @@ func resumeShip(t Task, h Hooks) Outcome {
 	}
 	logf("[%s] resume: verifying your changes in %s on %s", t.Ticket, worktree, branch)
 
-	// Reuse the preserved plan/report if present (for test commands + emulator).
+	// Reuse the preserved plan/report if present (for the emulator decision).
 	plan, _ := agent.ReadPlan(worktree)
 	report, _ := agent.ReadReport(worktree)
 
-	compileCmd := repo.Compile
-	if compileCmd == "" && plan != nil {
-		compileCmd = plan.CompileCmd
-	}
-	testCmd := repo.Test
-	if testCmd == "" && plan != nil {
-		testCmd = plan.TestCmd
-	}
 	needsEmu := plan != nil && plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
 
 	// Boot + acquire the emulator only if the original plan needed instrumented tests.
@@ -482,36 +480,38 @@ func resumeShip(t Task, h Hooks) Outcome {
 			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
 		}
 	}
-	activeTestCmd := testCmd
-	if needsEmu && repo.ConnectedTest != "" {
-		activeTestCmd = repo.ConnectedTest
-	}
-	logf("[%s] gate (resume): compile=%q test=%q emulator=%v", t.Ticket, compileCmd, activeTestCmd, needsEmu)
+	anthropicKey := secrets.Get(secrets.Anthropic)
+	logf("[%s] verify (resume): agent will run build + tests on your changes (emulator=%v)", t.Ticket, needsEmu)
 
-	// Single gate pass — the human already fixed it; the agent does not retry.
-	setState(store.StateBuilding, 0)
-	if r := build.Step(worktree, gradleHome, compileCmd, "compile"); !r.OK {
-		return resumeNeedsYou(t, h, setState, logf, worktree, r)
+	// The human already fixed the code; the agent only RUNS the build + tests to
+	// confirm it (allowFix=false — it never edits) and self-certifies in report.json.
+	vreport, verified, _ := verifyWithAgent(t, worktree, "", needsEmu, false, anthropicKey, logf, setState)
+	if !verified {
+		reason := "the build/tests are still red on your changes."
+		if vreport != nil && strings.TrimSpace(vreport.VerifyLog) != "" {
+			reason = vreport.VerifyLog
+		}
+		return resumeNeedsYou(t, h, setState, logf, worktree, reason)
 	}
-	setState(store.StateTesting, 0)
-	if r := build.Step(worktree, gradleHome, activeTestCmd, "test"); !r.OK {
-		return resumeNeedsYou(t, h, setState, logf, worktree, r)
+	if vreport != nil {
+		report = vreport
 	}
-	logf("[%s] gate green ✓", t.Ticket)
+	logf("[%s] verify (resume): agent certified your fix builds + passes ✓", t.Ticket)
 
 	return finishShip(t, h, worktree, branch, 1, report, logf, setState)
 }
 
-// resumeNeedsYou handles a gate failure during resume: it stops at needs-you and
-// asks the human to fix the worktree again (no automatic agent retry).
+// resumeNeedsYou handles a failed verification during resume: it stops at
+// needs-you and asks the human to fix the worktree again (the agent never edits
+// on the resume path). reason is the agent's verifyLog (or a fallback).
 func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(string, ...interface{}),
-	worktree string, r build.Result) Outcome {
-	logf("[%s] needs-you: %s still red after your changes", t.Ticket, r.Phase)
+	worktree, reason string) Outcome {
+	logf("[%s] needs-you: build/tests still red after your changes", t.Ticket)
 	setState(store.StateNeedsYou, 0)
 	if h.Comment != nil {
 		h.Comment(fmt.Sprintf(
-			"🤖 *magneton [%s] — still red after resume*\n\nThe *%s* step failed on your changes.\n\n*Last error (tail):*\n{code}\n%s\n{code}\n\nFix in the worktree and resume again:\n`open -a \"Android Studio\" %s`",
-			t.Ticket, r.Phase, tail(r.Output, 1500), worktree))
+			"🤖 *magneton [%s] — still red after resume*\n\nThe build or tests failed on your changes.\n\n*What the agent saw (tail):*\n{code}\n%s\n{code}\n\nFix in the worktree and resume again:\n`open -a \"Android Studio\" %s`",
+			t.Ticket, tail(reason, 1500), worktree))
 	}
 	return Outcome{State: store.StateNeedsYou}
 }

@@ -15,7 +15,7 @@ func TestConfigFieldsRoundTrip(t *testing.T) {
 		ModelPlan:   "claude-opus-4-8",
 		ModelImpl:   "claude-sonnet-4-6",
 		ModelReview: "claude-haiku-4-5",
-		Repos:       []config.Repo{{Path: "/r", Branch: "b", Compile: "c", Test: "t"}},
+		Repos:       []config.Repo{{Path: "/r", Branch: "b"}},
 	}
 	out := &config.Config{}
 	applyConfigFields(out, configFields(in))
@@ -26,7 +26,7 @@ func TestConfigFieldsRoundTrip(t *testing.T) {
 	if out.ModelPlan != "claude-opus-4-8" || out.ModelImpl != "claude-sonnet-4-6" || out.ModelReview != "claude-haiku-4-5" {
 		t.Errorf("model round-trip failed: plan=%q impl=%q review=%q", out.ModelPlan, out.ModelImpl, out.ModelReview)
 	}
-	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Compile != "c" {
+	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Branch != "b" {
 		t.Errorf("repo round-trip failed: %+v", out.Repos)
 	}
 }
@@ -40,7 +40,7 @@ func TestMenuQuitIsLast(t *testing.T) {
 }
 
 func TestConfigActionOpensForm(t *testing.T) {
-	// doAction("config") with a saved config → form view with a non-nil 9-field form.
+	// doAction("config") with a saved config → form view with a non-nil 7-field form.
 	t.Setenv("MAGNETON_HOME", t.TempDir())
 	if err := paths.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestConfigActionOpensForm(t *testing.T) {
 	if hub.view != viewForm || hub.form == nil {
 		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)
 	}
-	if len(hub.form.fields) != 9 {
-		t.Errorf("config form should have 9 fields, got %d", len(hub.form.fields))
+	if len(hub.form.fields) != 7 {
+		t.Errorf("config form should have 7 fields, got %d", len(hub.form.fields))
 	}
 }

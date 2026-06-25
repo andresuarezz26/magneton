@@ -281,8 +281,6 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Jira email", value: cfg.JiraEmail},
 		{label: "Repo path", value: repo.Path},
 		{label: "Branch", value: repo.Branch},
-		{label: "Compile", value: repo.Compile},
-		{label: "Test", value: repo.Test},
 		{label: "Model · plan (blank = default)", value: cfg.ModelPlan},
 		{label: "Model · implement (blank = default)", value: cfg.ModelImpl},
 		{label: "Model · review (blank = default)", value: cfg.ModelReview},
@@ -291,7 +289,7 @@ func configFields(cfg *config.Config) []formField {
 
 // applyConfigFields writes the (non-secret) form values back onto a config.
 func applyConfigFields(cfg *config.Config, f []formField) {
-	repo := config.Repo{MaxRetries: 3}
+	repo := config.Repo{}
 	if len(cfg.Repos) > 0 {
 		repo = cfg.Repos[0]
 	}
@@ -299,11 +297,9 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	cfg.JiraEmail = f[1].value
 	repo.Path = f[2].value
 	repo.Branch = f[3].value
-	repo.Compile = f[4].value
-	repo.Test = f[5].value
-	cfg.ModelPlan = f[6].value
-	cfg.ModelImpl = f[7].value
-	cfg.ModelReview = f[8].value
+	cfg.ModelPlan = f[4].value
+	cfg.ModelImpl = f[5].value
+	cfg.ModelReview = f[6].value
 	cfg.Repos = []config.Repo{repo}
 }
 
@@ -341,7 +337,6 @@ func (m *monitorModel) openSetupForm() {
 			Concurrency: 3, PollInterval: 30, MaxBudgetUSD: 5,
 			Repos: []config.Repo{{
 				Path: "~/src/android-app", Branch: "ai/{ticket}-{slug}",
-				Compile: "./gradlew :app:compileDebug", Test: "./gradlew testDebugUnitTest",
 			}},
 		}
 	}

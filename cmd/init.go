@@ -35,10 +35,9 @@ max_budget_usd = 5
 [[repo]]
 path        = "~/src/android-app"
 branch      = "ai/{ticket}-{slug}"
-compile     = "./gradlew :app:compileDebug"
-test        = "./gradlew testDebugUnitTest"
-max_retries = 3
 # base      = "main"
+# Build/test commands are intentionally not configured: the agent discovers and
+# runs verification itself (handles per-project setups and company build skills).
 `
 
 func init() {
@@ -88,13 +87,11 @@ func wizard() error {
 	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 
-	// Required: repo settings.
+	// Required: repo settings. Build/test commands are no longer asked — the agent
+	// discovers and runs verification itself.
 	repo := config.Repo{
-		Path:       ask(r, "Repository path", "~/src/android-app"),
-		Branch:     ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
-		Compile:    ask(r, "Compile command [optional — Claude Code will figure it out]", ""),
-		Test:       ask(r, "Test command [optional — Claude Code will figure it out]", ""),
-		MaxRetries: 3,
+		Path:   ask(r, "Repository path", "~/src/android-app"),
+		Branch: ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
 	}
 	cfg.Repos = []config.Repo{repo}
 

@@ -24,17 +24,27 @@ type Report struct {
 	// Empty when the repo has no template (the orchestrator then falls back to
 	// magneton's default PR body).
 	PRBody string `json:"prBody,omitempty"`
+	// Verified is the agent's self-certification from the verify stage: true once
+	// it has itself run this project's build + tests and seen them pass. nil/false
+	// means unverified — the orchestrator stops at needs-you instead of opening a
+	// PR. magneton trusts this flag rather than running its own Gradle commands, so
+	// per-project build setups and company-managed build skills all work.
+	Verified *bool `json:"verified,omitempty"`
+	// VerifyLog is a human-readable note of what the verify stage ran and the
+	// outcome (and, on failure, the failing output tail and why).
+	VerifyLog string `json:"verifyLog,omitempty"`
 }
 
 // Plan is the .agent/plan.json the plan stage must write before implementation.
+// It no longer records build/test commands — the verify stage discovers and runs
+// verification itself. NeedsEmulator is kept so the orchestrator can coordinate
+// the shared emulator across concurrent tickets before the verify stage runs.
 type Plan struct {
-	Plan          string   `json:"plan"`          // one-line approach summary
-	Steps         []string `json:"steps"`         // ordered implementation steps
-	Questions     []string `json:"questions"`     // blocking ambiguities; empty = proceed
-	Confidence    string   `json:"confidence"`    // "high" | "medium" | "low"
-	Type          string   `json:"type"`          // "bug" | "feature" | "chore"
-	CompileCmd    string   `json:"compileCmd"`    // discovered Gradle compile command
-	TestCmd       string   `json:"testCmd"`       // discovered Gradle test command
+	Plan          string   `json:"plan"`           // one-line approach summary
+	Steps         []string `json:"steps"`          // ordered implementation steps
+	Questions     []string `json:"questions"`      // blocking ambiguities; empty = proceed
+	Confidence    string   `json:"confidence"`     // "high" | "medium" | "low"
+	Type          string   `json:"type"`           // "bug" | "feature" | "chore"
 	NeedsEmulator bool     `json:"needs_emulator"` // true if task requires instrumentation tests
 }
 
@@ -231,13 +241,7 @@ Instructions:
    Only list a question if you truly cannot make a safe assumption — prefer a reasonable default.
 4. Classify the ticket type: "bug", "feature", or "chore".
 5. Rate your confidence: "high" (clear path), "medium" (some uncertainty), "low" (significant unknowns).
-6. Discover the correct Gradle commands for this project by inspecting build.gradle files.
-   For compileCmd: find a fully-qualified task like "./gradlew :app:compileDebugSources" or "./gradlew assembleDebug".
-     Run "./gradlew tasks --all 2>/dev/null | grep -i compile | head -20" to find valid tasks.
-   For testCmd: find a fully-qualified task like "./gradlew :app:testDebugUnitTest".
-     Run "./gradlew tasks --all 2>/dev/null | grep -i test | head -20" to find valid tasks.
-   Use empty string if the project has no Gradle setup.
-7. Decide whether this task requires a connected Android device or emulator.
+6. Decide whether this task requires a connected Android device or emulator.
    Set needs_emulator=true if ANY of these apply:
    - The ticket involves UI tests, Espresso, or Compose instrumentation tests.
    - The task creates or modifies files under androidTest/ directory.
@@ -252,8 +256,6 @@ Your ONLY write action is to create .agent/plan.json (create the .agent director
   "questions": ["<question if truly blocking>"],
   "confidence": "high" | "medium" | "low",
   "type": "bug" | "feature" | "chore",
-  "compileCmd": "<fully-qualified gradlew compile command, or empty string>",
-  "testCmd": "<fully-qualified gradlew test command, or empty string>",
   "needs_emulator": true | false
 }
 Use an empty array for questions if you can proceed without human input.`,
@@ -261,7 +263,7 @@ Use an empty array for questions if you can proceed without human input.`,
 }
 
 // BuildImplPrompt is the instruction for the implement stage, injecting the approved plan.
-func BuildImplPrompt(ticketKey, summary, description string, plan *Plan, compileCmd, testCmd string) string {
+func BuildImplPrompt(ticketKey, summary, description string, plan *Plan) string {
 	desc := strings.TrimSpace(description)
 	if desc == "" {
 		desc = "(no description provided)"
@@ -280,8 +282,8 @@ IMPLEMENTATION STEPS:
 
 Rules:
 - Follow the approved plan and steps above. Make the focused, minimal change described.
-- This is an Android/Gradle project. The orchestrator will verify with compile %q and tests %q — write code that will pass them.
-- Do NOT git push and do NOT open a pull request — the orchestrator handles build, commit, push, and PR.
+- This is an Android/Gradle project. A later verification step will build the project and run its tests — write code that compiles and passes.
+- Do NOT git push and do NOT open a pull request — the orchestrator handles commit, push, and PR.
 - PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change — keep its headings and checklist, replace placeholders with real content, and tick the boxes that genuinely apply — and put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
 - Your FINAL action MUST be to write .agent/report.json (create the .agent directory if needed):
 {
@@ -293,7 +295,7 @@ Rules:
   "prBody": "<repo PR template filled in, or \"\" if the repo has none>"
 }
 Use "needs_human" if you hit an unexpected blocker you cannot resolve safely.`,
-		ticketKey, summary, desc, plan.Plan, steps, compileCmd, testCmd)
+		ticketKey, summary, desc, plan.Plan, steps)
 }
 
 // BuildReviewPrompt is the instruction for the self-review stage.
@@ -328,6 +330,38 @@ func BuildReviewFixPrompt(issues []string) string {
 
 Issues to fix:
 - %s`, list)
+}
+
+// BuildVerifyPrompt has the session discover and RUN this project's own build +
+// test verification, then record the verdict in report.json. The agent
+// self-certifies — magneton trusts report.verified rather than running hardcoded
+// Gradle commands, so per-project build setups and company-managed build skills
+// all work, and the agent's process uses the real environment (no isolated-Gradle
+// TLS/cert problems). The agent discovers the build/test commands itself. When
+// allowFix is false it only confirms a human's existing fix and must not edit
+// code (the resume path). emulator tells it whether instrumented tests can run.
+func BuildVerifyPrompt(ticketKey, summary string, emulator, allowFix bool) string {
+	device := "No emulator/device is attached — run UNIT tests only; do NOT run instrumented/connected androidTest tasks."
+	if emulator {
+		device = "An Android emulator is booted and attached via adb — also run the instrumented/connected tests."
+	}
+	fixRule := `4. If the build or any test fails, FIX the code and re-run until everything passes. Set "verified": true ONLY after you have actually seen the build AND tests pass.`
+	if !allowFix {
+		fixRule = `4. Do NOT modify any source files — a human has already made the fix and you are only confirming it. Run the build + tests and report the result honestly.`
+	}
+	return fmt.Sprintf(`You are verifying that the change for ticket %s (%s) actually builds and passes its tests, inside an isolated git worktree (your current working directory).
+
+magneton does NOT run the build for you — YOU discover and run it. Android/Gradle setups differ per project and some teams ship their own build/test scripts or skills, so figure out the right way to verify THIS repo:
+1. Discover how this project builds and tests: inspect build.gradle(.kts), gradle.properties, settings.gradle, a Makefile, scripts/, README/CONTRIBUTING, CI config under .github/, and any company-provided build skill. No build/test commands are pre-configured — find them yourself.
+2. Compile the project. %s
+3. Run the tests. Capture the REAL pass/fail result — never assume it passed.
+%s
+- Do NOT git commit, git push, or open a pull request — the orchestrator owns commit/push/PR.
+- Your FINAL action MUST be to update .agent/report.json: read the existing file and rewrite it preserving every existing field, adding/setting:
+  "verified": true | false   (true ONLY if the build AND tests actually passed)
+  "verifyLog": "<the commands you ran and their outcome; on failure include the failing output tail and why>"
+Setting "verified": false is a normal outcome (not an error) when you cannot get it green — it routes the ticket to a human.`,
+		ticketKey, summary, device, fixRule)
 }
 
 // BuildPrompt is the legacy single-stage instruction (kept for tests and --local fallback).

@@ -29,5 +29,5 @@ go build -o agent .
 
 ## Conventions
 - Keep packages small and dependency-light; shell out to `git`/`gh`/`claude` rather than wrapping SDKs.
-- The agent edits code; the **orchestrator** owns build, commit, push, and PR.
+- The agent edits code **and verifies it** — it discovers + runs the project's own build/tests (handling per-project setups and company build skills) and self-certifies via `report.json` `verified`. The **orchestrator** owns commit, push, and PR, and trusts that verdict (it no longer runs Gradle itself).
 - Never auto-merge — stop at `review`.

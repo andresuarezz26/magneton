@@ -17,10 +17,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		JiraEmail:   "me@x.com",
 		Concurrency: 4,
 		Repos: []Repo{{
-			Path:    "/repo",
-			Branch:  "ai/{ticket}-{slug}",
-			Compile: "./gradlew compile",
-			Test:    "./gradlew test",
+			Path:   "/repo",
+			Branch: "ai/{ticket}-{slug}",
+			Base:   "main",
 		}},
 	}
 	if err := Save(in); err != nil {
@@ -33,7 +32,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got.JiraBaseURL != in.JiraBaseURL || got.JiraEmail != in.JiraEmail || got.Concurrency != 4 {
 		t.Errorf("scalars round-trip failed: %+v", got)
 	}
-	if len(got.Repos) != 1 || got.Repos[0].Path != "/repo" || got.Repos[0].Compile != "./gradlew compile" {
+	if len(got.Repos) != 1 || got.Repos[0].Path != "/repo" || got.Repos[0].Base != "main" {
 		t.Errorf("repo round-trip failed: %+v", got.Repos)
 	}
 }
