@@ -110,8 +110,20 @@ func Run(prompt string, o Options) (sessionID string, err error) {
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	sessionID = parseStream(stdout, o.Logf)
-	return sessionID, cmd.Wait()
+	// Read the stream in a goroutine and wait on the process separately. The
+	// agent can launch background processes during verify (e.g. `./gradlew … &`,
+	// and Gradle in turn forks a long-lived daemon) that inherit claude's stdout
+	// fd. When that happens the pipe never reaches EOF even after claude exits,
+	// so reading to EOF *before* Wait() would hang forever — which left tickets
+	// stuck in the build/running state after the agent had already finished.
+	// cmd.Wait() returns when the claude process itself exits (it only reaps the
+	// direct child, not the reparented daemon) and closes the read pipe, which
+	// unblocks parseStream.
+	idCh := make(chan string, 1)
+	go func() { idCh <- parseStream(stdout, o.Logf) }()
+	err = cmd.Wait()
+	sessionID = <-idCh
+	return sessionID, err
 }
 
 func parseStream(r io.Reader, logf func(string, ...interface{})) string {
