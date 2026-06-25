@@ -190,10 +190,53 @@ func logAssistant(ev map[string]interface{}, logf func(string, ...interface{})) 
 	}
 }
 
+// readAgentFile reads .agent/<name> from the worktree. The contract is that the
+// agent writes its scratch dir at the worktree root, but when the configured
+// repo is a module inside a larger repo, `git worktree add` checks out the whole
+// containing repo and the actual project (where the agent works and writes
+// .agent/) is a SUBDIRECTORY of the worktree. So if the file isn't at the root
+// we search the tree for the shallowest .agent/<name> and use that.
+func readAgentFile(worktreeDir, name string) ([]byte, error) {
+	root := filepath.Join(worktreeDir, ".agent", name)
+	if b, err := os.ReadFile(root); err == nil {
+		return b, nil
+	}
+	if found := findAgentFile(worktreeDir, name); found != "" {
+		if b, err := os.ReadFile(found); err == nil {
+			return b, nil
+		}
+	}
+	// Return the root-path error so the message names the expected location.
+	return os.ReadFile(root)
+}
+
+// findAgentFile returns the shallowest path to a "<dir>/.agent/<name>" anywhere
+// under worktreeDir, or "" if none. Heavy/irrelevant dirs are skipped to keep the
+// walk cheap; this only runs on the fallback path (file not at the root).
+func findAgentFile(worktreeDir, name string) string {
+	best, bestDepth := "", 1<<30
+	_ = filepath.WalkDir(worktreeDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		switch d.Name() {
+		case ".git", "build", ".gradle", "node_modules", ".idea":
+			return filepath.SkipDir
+		}
+		cand := filepath.Join(path, ".agent", name)
+		if _, statErr := os.Stat(cand); statErr == nil {
+			if depth := strings.Count(path, string(os.PathSeparator)); depth < bestDepth {
+				best, bestDepth = cand, depth
+			}
+		}
+		return nil
+	})
+	return best
+}
+
 // ReadReport loads .agent/report.json from the worktree.
 func ReadReport(worktreeDir string) (*Report, error) {
-	p := filepath.Join(worktreeDir, ".agent", "report.json")
-	b, err := os.ReadFile(p)
+	b, err := readAgentFile(worktreeDir, "report.json")
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +249,7 @@ func ReadReport(worktreeDir string) (*Report, error) {
 
 // ReadPlan loads .agent/plan.json from the worktree.
 func ReadPlan(worktreeDir string) (*Plan, error) {
-	p := filepath.Join(worktreeDir, ".agent", "plan.json")
-	b, err := os.ReadFile(p)
+	b, err := readAgentFile(worktreeDir, "plan.json")
 	if err != nil {
 		return nil, err
 	}
@@ -220,8 +262,7 @@ func ReadPlan(worktreeDir string) (*Plan, error) {
 
 // ReadReview loads .agent/review.json from the worktree.
 func ReadReview(worktreeDir string) (*Review, error) {
-	p := filepath.Join(worktreeDir, ".agent", "review.json")
-	b, err := os.ReadFile(p)
+	b, err := readAgentFile(worktreeDir, "review.json")
 	if err != nil {
 		return nil, err
 	}
