@@ -38,7 +38,7 @@ func agentActions(s store.Session) []paletteItem {
 	}
 	if hasWT {
 		if stuck {
-			items = append(items, paletteItem{"resume", "Resume (verify & ship)", "re-run the gate on your fix, then PR"})
+			items = append(items, paletteItem{"resume", "Create PR from my fix", "after you fix it in the worktree: gate, then open the PR"})
 		}
 		items = append(items,
 			paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
@@ -104,7 +104,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "resume":
 		if s := m.selected(); s != nil {
-			m.notice = "resuming " + s.Ticket + " (verify & ship)…"
+			m.notice = "creating PR from your fix for " + s.Ticket + "…"
 			arg := s.Ticket
 			if s.SourcePath != "" {
 				arg = s.SourcePath

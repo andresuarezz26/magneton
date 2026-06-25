@@ -759,12 +759,12 @@ func whyLines(s store.Session) []string {
 	case "failed":
 		return []string{
 			"✗ Failed — " + failReason(s.Ticket),
-			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
+			"  Open Android Studio (o) to fix, then press R to gate & open the PR.",
 		}
 	case "needs-you":
 		return []string{
 			"⚑ Needs you — the agent got stuck (see log below).",
-			"  Open Android Studio (o) to fix, then Resume (R) — verify & ship.",
+			"  Open Android Studio (o) to fix, then press R to gate & open the PR.",
 		}
 	}
 	return nil
