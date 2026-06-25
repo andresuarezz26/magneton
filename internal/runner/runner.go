@@ -81,7 +81,7 @@ func Run(t Task, h Hooks) Outcome {
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
 	).Replace(repo.Branch)
-	worktree := paths.WorktreeFor(t.Ticket)
+	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
 
 	// 1. Provision an isolated worktree (Decision 7).
@@ -445,7 +445,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
 	).Replace(repo.Branch)
-	worktree := paths.WorktreeFor(t.Ticket)
+	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
 		setState(store.StateFailed, 0)
@@ -527,7 +527,7 @@ func shipOnly(t Task, h Hooks) Outcome {
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
 	).Replace(repo.Branch)
-	worktree := paths.WorktreeFor(t.Ticket)
+	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
 		setState(store.StateFailed, 0)

@@ -459,7 +459,7 @@ func (m monitorModel) cancelAgent(s store.Session) tea.Cmd {
 		}
 		wt := s.Worktree
 		if wt == "" {
-			wt = paths.WorktreeFor(s.Ticket)
+			wt = paths.WorktreeFor(s.Repo, s.Ticket)
 		}
 		if s.Repo != "" {
 			_ = git.RemoveWorktree(s.Repo, wt)
@@ -773,7 +773,7 @@ func whyLines(s store.Session) []string {
 	}
 	switch s.State {
 	case "awaiting-answer":
-		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Ticket)); err == nil && len(plan.Questions) > 0 {
+		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && len(plan.Questions) > 0 {
 			out := []string{fmt.Sprintf("▮ Needs you — press ↵ enter to answer %d question(s):", len(plan.Questions))}
 			for i, q := range plan.Questions {
 				out = append(out, fmt.Sprintf("  Q%d %s", i+1, q))

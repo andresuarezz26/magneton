@@ -18,9 +18,11 @@ func itemIDs(items []paletteItem) map[string]bool {
 }
 
 // mkWorktree creates a fake worktree (a dir with a .git link) for a ticket.
+// Empty repo → the agent-home fallback path, matching the repo-less Sessions
+// the action tests build.
 func mkWorktree(t *testing.T, ticket string) {
 	t.Helper()
-	wt := paths.WorktreeFor(ticket)
+	wt := paths.WorktreeFor("", ticket)
 	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}

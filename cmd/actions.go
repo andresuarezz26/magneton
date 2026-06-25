@@ -20,8 +20,8 @@ func shellQuote(s string) string {
 // worktreeExists reports whether the ticket still has a usable git worktree.
 // "Stop & clean up" removes it, so Resume / Open Studio / Open Claude only make
 // sense when this is true.
-func worktreeExists(ticket string) bool {
-	_, err := os.Stat(filepath.Join(paths.WorktreeFor(ticket), ".git"))
+func worktreeExists(repo, ticket string) bool {
+	_, err := os.Stat(filepath.Join(paths.WorktreeFor(repo, ticket), ".git"))
 	return err == nil
 }
 
@@ -29,7 +29,7 @@ func worktreeExists(ticket string) bool {
 // whether its worktree still exists. Shown when the user presses Enter on it.
 func agentActions(s store.Session) []paletteItem {
 	var items []paletteItem
-	hasWT := worktreeExists(s.Ticket)
+	hasWT := worktreeExists(s.Repo, s.Ticket)
 	active := store.IsActive(s.State)
 	stuck := s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s)
 	done := s.State == "review" || s.State == "merged" || s.State == "closed"
@@ -76,7 +76,7 @@ type claudeClosedMsg struct{ err error }
 // session in the ticket's worktree, resuming the agent's stored session when
 // there is one. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
-	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Ticket)) + " && claude"
+	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Repo, s.Ticket)) + " && claude"
 	if s.SessionID != "" {
 		cmdline += " --resume " + shellQuote(s.SessionID)
 	}
@@ -111,7 +111,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "studio":
 		if s := m.selected(); s != nil {
-			wt := paths.WorktreeFor(s.Ticket)
+			wt := paths.WorktreeFor(s.Repo, s.Ticket)
 			// Prefer the JetBrains `studio` launcher (opens the dir as a project);
 			// fall back to the macOS app.
 			if _, err := exec.LookPath("studio"); err == nil {

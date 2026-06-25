@@ -25,8 +25,22 @@ func Reports() string   { return filepath.Join(Root(), "reports") }
 func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
 func PidFile() string    { return filepath.Join(Root(), "daemon.pid") }
 
-func WorktreeFor(ticket string) string { return filepath.Join(Worktrees(), ticket) }
-func GradleHomeFor(_ string) string    { return filepath.Join(Root(), ".gradle-home") }
+// WorktreeFor returns a ticket's worktree path. To mirror how native
+// `git worktree` (and Claude Code's `claude worktree`) place worktrees next to
+// the project rather than off in a hidden home dir, it sits in a sibling
+// directory of the repo: "<repo-parent>/<repo>-worktrees/<ticket>". This keeps a
+// ticket's checkout adjacent to its repo (easy to find / open in an IDE) while
+// staying outside the repo so the parent's git never sees it. Falls back to the
+// agent home (~/.agent/worktrees/<ticket>) when repo is empty.
+func WorktreeFor(repo, ticket string) string {
+	if repo == "" {
+		return filepath.Join(Worktrees(), ticket)
+	}
+	repo = filepath.Clean(repo)
+	return filepath.Join(filepath.Dir(repo), filepath.Base(repo)+"-worktrees", ticket)
+}
+
+func GradleHomeFor(_ string) string { return filepath.Join(Root(), ".gradle-home") }
 func LogFor(ticket string) string      { return filepath.Join(Logs(), ticket+".log") }
 
 // ReportFor is where magneton archives a ticket's completion report, kept in
