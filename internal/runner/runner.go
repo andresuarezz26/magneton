@@ -111,6 +111,7 @@ func Run(t Task, h Hooks) Outcome {
 		Model:        modelPlan,
 		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
 		AnthropicKey: anthropicKey,
+		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
 	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, t.Description), planOpts); err != nil {
@@ -166,6 +167,7 @@ func Run(t Task, h Hooks) Outcome {
 		Model:        modelImpl,
 		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
 		AnthropicKey: anthropicKey,
+		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
 	sessionID, runErr := agent.Run(
@@ -207,6 +209,7 @@ func Run(t Task, h Hooks) Outcome {
 		Model:        modelReview,
 		MaxBudgetUSD: t.Cfg.MaxBudgetUSD * 0.3,
 		AnthropicKey: anthropicKey,
+		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
 	if _, err := agent.Run(agent.BuildReviewPrompt(t.Ticket, t.Summary, plan), reviewOpts); err != nil {
@@ -403,6 +406,7 @@ func verifyWithAgent(t Task, worktree, sessionID string,
 		MaxBudgetUSD: t.Cfg.MaxBudgetUSD,
 		AnthropicKey: anthropicKey,
 		ResumeID:     sessionID,
+		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
 	newSession := sessionID

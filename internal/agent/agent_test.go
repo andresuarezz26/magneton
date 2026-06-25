@@ -3,8 +3,40 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// argValue returns the argument following the first occurrence of flag, or "".
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+func TestBuildArgsIncludesSettingsWhenSet(t *testing.T) {
+	args := buildArgs("do the thing", Options{
+		AllowedTools: "Read",
+		SettingsJSON: `{"sandbox":{"enabled":false}}`,
+	})
+	v, ok := argValue(args, "--settings")
+	if !ok {
+		t.Fatalf("--settings not passed: %v", args)
+	}
+	if v != `{"sandbox":{"enabled":false}}` {
+		t.Errorf("--settings value = %q", v)
+	}
+}
+
+func TestBuildArgsOmitsSettingsWhenEmpty(t *testing.T) {
+	args := buildArgs("do the thing", Options{AllowedTools: "Read"})
+	if strings.Contains(strings.Join(args, " "), "--settings") {
+		t.Errorf("--settings should be omitted when SettingsJSON is empty: %v", args)
+	}
+}
 
 // writeAgentJSON writes <dir>/.agent/<name> with the given JSON body.
 func writeAgentJSON(t *testing.T, dir, name, body string) {

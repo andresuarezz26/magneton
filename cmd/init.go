@@ -32,6 +32,17 @@ max_budget_usd = 5
 # model_impl   = "sonnet"
 # model_review = "opus"
 
+# Claude Code OS sandbox posture for magneton's own runs. By default magneton
+# DISABLES the sandbox for its child claude, because Gradle needs network access
+# and writes to ~/.gradle that the sandbox blocks (magneton's guardrail is the
+# scoped allowed_tools allowlist, not the OS sandbox). To keep the sandbox on —
+# e.g. on a shared/CI machine — set enabled = true; magneton then bakes in the
+# domains/paths Gradle needs, and you can add more here.
+# [sandbox]
+# enabled = true
+# allowed_domains = ["your-artifactory.example.com"]
+# allow_write     = ["~/.m2"]
+
 [[repo]]
 path        = "~/src/android-app"
 branch      = "ai/{ticket}-{slug}"

@@ -1,3 +1,7 @@
+// Package build manages the Android emulator (AVD boot/wait/kill) used during
+// the verify stage. The compile/test gate itself is no longer run here — the
+// agent discovers and runs the project's own build and self-certifies via
+// report.json.
 package build
 
 import (

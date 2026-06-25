@@ -23,7 +23,7 @@ func Logs() string      { return filepath.Join(Root(), "logs") }
 func Templates() string { return filepath.Join(Root(), "templates") }
 func Reports() string   { return filepath.Join(Root(), "reports") }
 func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
-func PidFile() string    { return filepath.Join(Root(), "daemon.pid") }
+func PidFile() string   { return filepath.Join(Root(), "daemon.pid") }
 
 // WorktreeFor returns a ticket's worktree path. To mirror how native
 // `git worktree` (and Claude Code's `claude worktree`) place worktrees next to
@@ -40,8 +40,7 @@ func WorktreeFor(repo, ticket string) string {
 	return filepath.Join(filepath.Dir(repo), filepath.Base(repo)+"-worktrees", ticket)
 }
 
-func GradleHomeFor(_ string) string { return filepath.Join(Root(), ".gradle-home") }
-func LogFor(ticket string) string      { return filepath.Join(Logs(), ticket+".log") }
+func LogFor(ticket string) string { return filepath.Join(Logs(), ticket+".log") }
 
 // ReportFor is where magneton archives a ticket's completion report, kept in
 // magneton's own home so it never lands in the target repo / PR.

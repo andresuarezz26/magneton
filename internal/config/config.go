@@ -3,6 +3,7 @@ package config
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,72 @@ type Config struct {
 	EmulatorIdleTimeout int     `toml:"emulator_idle_timeout"`
 	TelemetryEnabled    *bool   `toml:"telemetry_enabled"`
 	DeviceID            string  `toml:"device_id"`
+	Sandbox             Sandbox `toml:"sandbox"`
 	Repos               []Repo  `toml:"repo"`
+}
+
+// Sandbox controls Claude Code's OS sandbox for magneton's child `claude` runs.
+// The default (Enabled=false) disables the sandbox for magneton's autonomous
+// runs so Gradle gets the network and `~/.gradle` writes it needs — magneton's
+// guardrail is the scoped --allowed-tools allowlist, not the OS sandbox. Set
+// Enabled=true (e.g. on shared/CI machines) to keep the sandbox on; the
+// Gradle-friendly defaults below are then merged with these extra lists.
+type Sandbox struct {
+	Enabled        bool     `toml:"enabled"`
+	AllowedDomains []string `toml:"allowed_domains"` // extra network domains when Enabled
+	AllowWrite     []string `toml:"allow_write"`     // extra writable paths when Enabled
+}
+
+// defaultSandboxDomains / defaultSandboxWrites are the network + filesystem
+// allowances Gradle needs, baked in so an Enabled sandbox can still build a
+// typical Android project. Users extend these via [sandbox] in config.
+var (
+	defaultSandboxDomains = []string{
+		"repo.maven.apache.org", // Maven Central
+		"dl.google.com",         // Google Maven (AndroidX, build tools)
+		"*.gradle.org",          // plugins.gradle.org, services.gradle.org, …
+	}
+	defaultSandboxWrites = []string{"~/.gradle", "~/.konan", "~/.android"}
+)
+
+// SandboxSettingsJSON returns the `--settings` payload magneton passes to its
+// child `claude`, overriding the machine's global sandbox setting for that one
+// process. Default (Enabled=false) → the sandbox is turned off for magneton's
+// runs. Enabled=true → the sandbox stays on with Gradle-friendly allowlists.
+func (c *Config) SandboxSettingsJSON() string {
+	type network struct {
+		AllowedDomains []string `json:"allowedDomains,omitempty"`
+	}
+	type filesystem struct {
+		AllowWrite []string `json:"allowWrite,omitempty"`
+	}
+	type sandbox struct {
+		Enabled    bool        `json:"enabled"`
+		Network    *network    `json:"network,omitempty"`
+		Filesystem *filesystem `json:"filesystem,omitempty"`
+	}
+	s := sandbox{Enabled: c.Sandbox.Enabled}
+	if c.Sandbox.Enabled {
+		domains := append(append([]string{}, defaultSandboxDomains...), c.Sandbox.AllowedDomains...)
+		writes := append(append([]string{}, defaultSandboxWrites...), c.Sandbox.AllowWrite...)
+		if c.AndroidSDKPath != "" {
+			writes = append(writes, c.AndroidSDKPath)
+		}
+		for i, w := range writes {
+			writes[i] = expand(w)
+		}
+		s.Network = &network{AllowedDomains: domains}
+		s.Filesystem = &filesystem{AllowWrite: writes}
+	}
+	b, err := json.Marshal(struct {
+		Sandbox sandbox `json:"sandbox"`
+	}{s})
+	if err != nil {
+		// Static shapes; marshal can't realistically fail. Fall back to the
+		// disabled posture rather than emitting nothing.
+		return `{"sandbox":{"enabled":false}}`
+	}
+	return string(b)
 }
 
 // GenerateDeviceID returns a random UUID v4 string. Call once at consent time.

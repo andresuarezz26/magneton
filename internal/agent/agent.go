@@ -73,18 +73,23 @@ type Options struct {
 	AnthropicKey string
 	Model        string // e.g. "claude-opus-4-8", "claude-sonnet-4-6"; empty = claude default
 	ResumeID     string // set to resume the same session for retries (Decision 4)
+	SettingsJSON string // inline --settings payload (e.g. sandbox posture); empty = omit
 	Logf         func(format string, args ...interface{})
 }
 
-// Run invokes `claude -p` with stream-json, streaming progress through Logf.
-// It returns the session id (for resuming on retry) and any process error.
-func Run(prompt string, o Options) (sessionID string, err error) {
+// buildArgs assembles the `claude` argv for the given prompt and options. Split
+// out from Run so the flag wiring (notably --settings) is unit-testable without
+// spawning the CLI.
+func buildArgs(prompt string, o Options) []string {
 	args := []string{
 		"-p", prompt,
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-mode", "acceptEdits",
 		"--allowed-tools", o.AllowedTools,
+	}
+	if o.SettingsJSON != "" {
+		args = append(args, "--settings", o.SettingsJSON)
 	}
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)
@@ -95,8 +100,13 @@ func Run(prompt string, o Options) (sessionID string, err error) {
 	if o.ResumeID != "" {
 		args = append(args, "--resume", o.ResumeID)
 	}
+	return args
+}
 
-	cmd := exec.Command("claude", args...)
+// Run invokes `claude -p` with stream-json, streaming progress through Logf.
+// It returns the session id (for resuming on retry) and any process error.
+func Run(prompt string, o Options) (sessionID string, err error) {
+	cmd := exec.Command("claude", buildArgs(prompt, o)...)
 	cmd.Dir = o.WorktreeDir
 	cmd.Env = os.Environ()
 	if o.AnthropicKey != "" {
