@@ -32,6 +32,7 @@ type Task struct {
 	Cfg         *config.Config
 	DryRun      bool
 	Resume      bool         // verify & ship: continue from the existing worktree, no re-plan/implement
+	Ship        bool         // ship without verifying: trust the human's fix, commit + push + PR directly
 	Store       *store.Store // optional; enables emulator coordination
 }
 
@@ -53,6 +54,9 @@ type Outcome struct {
 // Run executes the full staged pipeline for one ticket:
 // PLAN → CLARIFY → IMPLEMENT → SELF-REVIEW → GATE → PR
 func Run(t Task, h Hooks) Outcome {
+	if t.Ship {
+		return shipOnly(t, h)
+	}
 	if t.Resume {
 		return resumeShip(t, h)
 	}
@@ -498,6 +502,46 @@ func resumeShip(t Task, h Hooks) Outcome {
 	}
 	logf("[%s] verify (resume): agent certified your fix builds + passes ✓", t.Ticket)
 
+	return finishShip(t, h, worktree, branch, 1, report, logf, setState)
+}
+
+// shipOnly trusts the human's fix completely: it SKIPS verification entirely and
+// goes straight to commit + push + PR from the existing worktree. It's the escape
+// hatch for when verification itself is the unreliable part — e.g. sandbox or
+// environment constraints in the worktree that fail the build regardless of the
+// code (the Kotlin Native cache .lock case), where re-running the gate would loop
+// in needs-you forever no matter how good the fix is. The human has confirmed it
+// by hand; magneton takes their word and ships.
+func shipOnly(t Task, h Hooks) Outcome {
+	logf := h.Logf
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
+	setState := func(s string, r int) {
+		if h.OnState != nil {
+			h.OnState(s, r)
+		}
+	}
+	repo := t.Repo
+	branch := strings.NewReplacer(
+		"{ticket}", strings.ToLower(t.Ticket),
+		"{slug}", slugify(t.Summary),
+	).Replace(repo.Branch)
+	worktree := paths.WorktreeFor(t.Ticket)
+
+	if !worktreeReady(worktree) {
+		setState(store.StateFailed, 0)
+		return Outcome{State: store.StateFailed,
+			Err: fmt.Errorf("ship: no worktree at %s — run without --ship to start fresh", worktree)}
+	}
+	if h.OnField != nil {
+		h.OnField(branch, worktree, "")
+	}
+	logf("[%s] ship: trusting your fix — skipping verification, committing + opening PR", t.Ticket)
+
+	// Reuse the last report (for PR body/files) if one survived; finishShip
+	// tolerates a nil report.
+	report, _ := agent.ReadReport(worktree)
 	return finishShip(t, h, worktree, branch, 1, report, logf, setState)
 }
 

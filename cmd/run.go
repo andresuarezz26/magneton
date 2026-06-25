@@ -24,6 +24,7 @@ var (
 	runTitle  string
 	runDesc   string
 	runResume bool
+	runShip   bool
 )
 
 func init() {
@@ -39,6 +40,7 @@ func init() {
 	c.Flags().StringVar(&runTitle, "title", "", "ticket summary (requires --local)")
 	c.Flags().StringVar(&runDesc, "desc", "", "ticket description (with --local)")
 	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
+	c.Flags().BoolVar(&runShip, "ship", false, "ship without verifying: trust your manual fix, commit + push + PR directly (use when verification itself is unreliable in the worktree)")
 	rootCmd.AddCommand(c)
 }
 
@@ -170,6 +172,18 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	logf, closeLog := newLogger(sp.ticket)
 	defer closeLog()
 	start := time.Now()
+
+	// Concurrency guard: refuse to start a second run on a ticket that already has
+	// a live process driving it (deterministic via kill -0). Without this, tapping
+	// a dashboard action (Resume / Trust my fix) while the "Open in Claude Code"
+	// auto-chain is also pending could fire two runs on the same worktree at once.
+	if existing, err := st.Get(sp.ticket); err == nil && existing != nil &&
+		existing.PID != 0 && existing.PID != os.Getpid() && processAlive(existing.PID) {
+		logf("[%s] already running (pid %d) — refusing to start a second run", sp.ticket, existing.PID)
+		return runner.Outcome{State: existing.State,
+			Err: fmt.Errorf("%s already running (pid %d)", sp.ticket, existing.PID)}
+	}
+
 	tel.Track("run_started", map[string]any{"local": sp.local})
 
 	summary, desc := sp.summary, sp.desc
@@ -219,7 +233,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
-		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume,
+		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
 		Store: st,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in

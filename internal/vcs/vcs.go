@@ -130,6 +130,12 @@ func OpenPR(worktreeDir, base, title, body string) (string, error) {
 	cmd.Dir = worktreeDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		// Idempotent ship: a PR for this branch may already exist (e.g. a second
+		// resume/ship after the first already opened it). Treat that as success by
+		// returning the existing PR's URL instead of flipping the ticket to failed.
+		if existing := existingPRURL(worktreeDir); existing != "" {
+			return existing, nil
+		}
 		return "", fmt.Errorf("gh pr create: %w\n%s", err, out)
 	}
 	for _, f := range strings.Fields(string(out)) {
@@ -138,6 +144,19 @@ func OpenPR(worktreeDir, base, title, body string) (string, error) {
 		}
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// existingPRURL returns the URL of the PR for the current branch in worktreeDir,
+// or "" if there is none (or gh can't tell). Used to make OpenPR idempotent when
+// a PR already exists for the branch.
+func existingPRURL(worktreeDir string) string {
+	cmd := exec.Command("gh", "pr", "view", "--json", "url", "-q", ".url")
+	cmd.Dir = worktreeDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // PRState returns the PR's state via gh: "OPEN", "MERGED", or "CLOSED".

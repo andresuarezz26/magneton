@@ -38,7 +38,10 @@ func agentActions(s store.Session) []paletteItem {
 	}
 	if hasWT {
 		if stuck {
-			items = append(items, paletteItem{"resume", "Create PR from my fix", "after you fix it in the worktree: gate, then open the PR"})
+			items = append(items,
+				paletteItem{"resume", "Create PR from my fix", "after you fix it in the worktree: gate, then open the PR"},
+				paletteItem{"ship", "Trust my fix & open PR", "skip verification — commit + push + PR (when the gate itself is unreliable here)"},
+			)
 		}
 		items = append(items,
 			paletteItem{"studio", "Open Android Studio", "open the worktree as a project"},
@@ -67,6 +70,17 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Ticket)) + " && claude"
 	if s.SessionID != "" {
 		cmdline += " --resume " + shellQuote(s.SessionID)
+	}
+	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
+	// session to fix it by hand. Chain magneton's own gate+PR after the
+	// interactive session exits, so finishing the fix automatically re-runs
+	// verification and opens the PR — no need to come back and tap "Create PR
+	// from my fix". `run --resume` writes to the store, so the dashboard reflects
+	// the outcome. (If the user closes the window instead of exiting claude the
+	// chained command can't run — an inherent limit of doing this in-terminal.)
+	stuck := s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s)
+	if self, err := os.Executable(); err == nil && stuck {
+		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
 	}
 	script := "tell application \"Terminal\"\n\tdo script \"" + cmdline + "\"\n\tactivate\nend tell"
 	return func() tea.Msg {
@@ -110,6 +124,15 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 				arg = s.SourcePath
 			}
 			return m, m.launchRun(arg + " --resume")
+		}
+	case "ship":
+		if s := m.selected(); s != nil {
+			m.notice = "shipping " + s.Ticket + " without re-verifying…"
+			arg := s.Ticket
+			if s.SourcePath != "" {
+				arg = s.SourcePath
+			}
+			return m, m.launchRun(arg + " --ship")
 		}
 	case "rerun":
 		if s := m.selected(); s != nil {
