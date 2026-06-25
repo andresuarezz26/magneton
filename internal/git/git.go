@@ -73,7 +73,42 @@ func CreateWorktree(repo, worktreeDir, branch, base string) error {
 	if _, err := run(repo, "worktree", "add", "-B", branch, worktreeDir, "origin/"+base); err != nil {
 		return err
 	}
+	excludeAgentDir(worktreeDir)
 	return nil
+}
+
+// excludeAgentDir adds magneton's scratch dir (.agent/{plan,report,review}.json)
+// to the worktree's git exclude so `git add -A` never stages it — magneton's
+// artifacts must not leak into the target repo's commits/PRs. Best-effort.
+func excludeAgentDir(worktreeDir string) {
+	rel, err := run(worktreeDir, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return
+	}
+	excl := rel
+	if !filepath.IsAbs(excl) {
+		excl = filepath.Join(worktreeDir, excl)
+	}
+	if data, err := os.ReadFile(excl); err == nil && strings.Contains(string(data), ".agent/") {
+		return // already excluded
+	}
+	if err := os.MkdirAll(filepath.Dir(excl), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(excl, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("\n# magneton scratch (plan/report/review) — never commit\n.agent/\n")
+}
+
+// UntrackAgentDir removes a previously-committed .agent/ scratch dir from the
+// index (no-op via --ignore-unmatch if it was never tracked) so it stops
+// appearing in PRs. Combined with the worktree exclude, this keeps magneton's
+// artifacts out of the target repo.
+func UntrackAgentDir(worktreeDir string) {
+	_, _ = run(worktreeDir, "rm", "-r", "--cached", "--ignore-unmatch", ".agent")
 }
 
 // RemoveWorktree tears down a worktree (called on PR close in Phase 2).

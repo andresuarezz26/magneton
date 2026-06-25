@@ -5,6 +5,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -314,6 +315,17 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	logf func(string, ...interface{}), setState func(string, int)) Outcome {
 	repo := t.Repo
 
+	// Re-read the freshest report (self-review/fix rounds rewrite it), archive it
+	// in magneton's own home, and make sure the .agent/ scratch dir never lands in
+	// the commit/PR. report may be nil on the resume path.
+	if fresh, err := agent.ReadReport(worktree); err == nil {
+		report = fresh
+	}
+	if report != nil {
+		archiveReport(t.Ticket, report, logf)
+	}
+	git.UntrackAgentDir(worktree)
+
 	if git.HasChanges(worktree) {
 		if err := git.CommitAll(worktree, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary)); err != nil {
 			setState(store.StateFailed, attempts-1)
@@ -347,9 +359,18 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 		FilesChanged: files, Tests: "✅ compile + tests",
 		Attempts: attempts, JiraBaseURL: t.Cfg.JiraBaseURL,
 	}
-	body, err := vcs.RenderPRBody(pr)
-	if err != nil {
-		return Outcome{State: store.StateFailed, Err: err}
+	// Prefer the repo's own PR template (filled in by the agent); fall back to
+	// magneton's default body only when the repo has no template.
+	body := ""
+	if report != nil && strings.TrimSpace(report.PRBody) != "" {
+		body = report.PRBody
+		logf("[%s] PR body from repo template", t.Ticket)
+	} else {
+		b, err := vcs.RenderPRBody(pr)
+		if err != nil {
+			return Outcome{State: store.StateFailed, Err: err}
+		}
+		body = b
 	}
 	prURL, err := vcs.OpenPR(worktree, base, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary), body)
 	if err != nil {
@@ -369,6 +390,24 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	}
 	logf("[%s] review — human-gated. magneton stops here.", t.Ticket)
 	return Outcome{State: store.StateReview, PRURL: prURL}
+}
+
+// archiveReport persists a ticket's completion report into magneton's own home
+// (~/.agent/reports/<ticket>.json) so it survives outside the worktree and can
+// later be surfaced by a report viewer — without ever being committed to the
+// target repo. Best-effort: a failure here never blocks shipping.
+func archiveReport(ticket string, r *agent.Report, logf func(string, ...interface{})) {
+	if err := os.MkdirAll(paths.Reports(), 0o755); err != nil {
+		logf("[%s] (warn) could not create reports dir: %v", ticket, err)
+		return
+	}
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(paths.ReportFor(ticket), b, 0o644); err != nil {
+		logf("[%s] (warn) could not archive report: %v", ticket, err)
+	}
 }
 
 // worktreeReady reports whether dir is a usable git worktree (has its .git link).

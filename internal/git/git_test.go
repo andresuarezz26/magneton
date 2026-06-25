@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,40 @@ func TestCreateWorktreeIdempotent(t *testing.T) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// CreateWorktree must exclude magneton's .agent/ scratch dir so it never lands
+// in a commit — even though the agent writes report.json there and the
+// orchestrator commits with `git add -A`.
+func TestWorktreeExcludesAgentDir(t *testing.T) {
+	repo := setupRepo(t)
+	wt := filepath.Join(t.TempDir(), "KAN-1")
+	if err := CreateWorktree(repo, wt, "ai/kan-1-x", "main"); err != nil {
+		t.Fatal(err)
+	}
+	// The agent writes its report here; an ordinary source file lands too.
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "report.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "Real.kt"), []byte("class Real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAll(wt, "work"); err != nil {
+		t.Fatal(err)
+	}
+	files, err := run(wt, "show", "--name-only", "--pretty=format:", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(files, ".agent/") {
+		t.Errorf(".agent/ leaked into the commit:\n%s", files)
+	}
+	if !strings.Contains(files, "Real.kt") {
+		t.Errorf("expected the real source file to be committed, got:\n%s", files)
+	}
 }
 
 func TestPushForceAllowsRerun(t *testing.T) {

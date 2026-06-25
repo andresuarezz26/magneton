@@ -20,6 +20,10 @@ type Report struct {
 	FilesChanged []string `json:"filesChanged"`
 	Branch       string   `json:"branch"`
 	Tests        string   `json:"tests"`
+	// PRBody is the repo's own pull-request template, filled in for this change.
+	// Empty when the repo has no template (the orchestrator then falls back to
+	// magneton's default PR body).
+	PRBody string `json:"prBody,omitempty"`
 }
 
 // Plan is the .agent/plan.json the plan stage must write before implementation.
@@ -278,13 +282,15 @@ Rules:
 - Follow the approved plan and steps above. Make the focused, minimal change described.
 - This is an Android/Gradle project. The orchestrator will verify with compile %q and tests %q — write code that will pass them.
 - Do NOT git push and do NOT open a pull request — the orchestrator handles build, commit, push, and PR.
+- PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change — keep its headings and checklist, replace placeholders with real content, and tick the boxes that genuinely apply — and put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
 - Your FINAL action MUST be to write .agent/report.json (create the .agent directory if needed):
 {
   "status": "ready_for_build" | "needs_human",
   "summary": "<one line: what changed and why>",
   "filesChanged": ["<relative paths>"],
   "branch": "",
-  "tests": "<what you checked, if anything>"
+  "tests": "<what you checked, if anything>",
+  "prBody": "<repo PR template filled in, or \"\" if the repo has none>"
 }
 Use "needs_human" if you hit an unexpected blocker you cannot resolve safely.`,
 		ticketKey, summary, desc, plan.Plan, steps, compileCmd, testCmd)
