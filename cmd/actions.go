@@ -39,8 +39,8 @@ func agentActions(s store.Session) []paletteItem {
 	if hasWT {
 		if stuck {
 			items = append(items,
-				paletteItem{"resume", "Create PR from my fix", "after you fix it in the worktree: gate, then open the PR"},
-				paletteItem{"ship", "Trust my fix & open PR", "skip verification — commit + push + PR (when the gate itself is unreliable here)"},
+				paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"},
+				paletteItem{"ship", "Open a PR", "skip verification — commit + push + PR (when the gate itself is unreliable here)"},
 			)
 		}
 		items = append(items,
@@ -118,7 +118,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "resume":
 		if s := m.selected(); s != nil {
-			m.notice = "creating PR from your fix for " + s.Ticket + "…"
+			m.notice = "resuming " + s.Ticket + " from the last stage…"
 			arg := s.Ticket
 			if s.SourcePath != "" {
 				arg = s.SourcePath
@@ -127,7 +127,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "ship":
 		if s := m.selected(); s != nil {
-			m.notice = "shipping " + s.Ticket + " without re-verifying…"
+			m.notice = "opening a PR for " + s.Ticket + " without re-verifying…"
 			arg := s.Ticket
 			if s.SourcePath != "" {
 				arg = s.SourcePath

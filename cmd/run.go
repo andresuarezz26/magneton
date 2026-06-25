@@ -173,11 +173,16 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	defer closeLog()
 	start := time.Now()
 
-	// Concurrency guard: refuse to start a second run on a ticket that already has
-	// a live process driving it (deterministic via kill -0). Without this, tapping
-	// a dashboard action (Resume / Trust my fix) while the "Open in Claude Code"
-	// auto-chain is also pending could fire two runs on the same worktree at once.
+	// Concurrency guard: refuse to start a second run on a ticket that is actively
+	// in progress (deterministic via kill -0). Without this, tapping a dashboard
+	// action (Resume / Open a PR) while the "Open in Claude Code" auto-chain is
+	// also pending could fire two runs on the same worktree at once. The state
+	// check is essential: in a terminal state (needs-you/failed/review/…) the
+	// driver process has already exited, so its recorded PID is stale and may have
+	// been recycled by an unrelated process — guarding on liveness alone would
+	// wrongly report "already running".
 	if existing, err := st.Get(sp.ticket); err == nil && existing != nil &&
+		store.IsActive(existing.State) &&
 		existing.PID != 0 && existing.PID != os.Getpid() && processAlive(existing.PID) {
 		logf("[%s] already running (pid %d) — refusing to start a second run", sp.ticket, existing.PID)
 		return runner.Outcome{State: existing.State,
