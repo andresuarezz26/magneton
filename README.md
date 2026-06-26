@@ -1,18 +1,25 @@
 # magneton
 
-**Automate Android development workflows with Claude Code.**
+**Stop babysitting your coding agent. Start supervising a fleet of them.**
 
-magneton takes a ticket, runs it through three stages — **plan → implement → verify** — and opens a PR for you to review. Run multiple tickets in parallel using isolated git worktrees. A live TUI dashboard shows every agent's status and tells you exactly when a ticket needs your input. If everything goes well, you just review the PR.
+magneton is a TUI for Android devs. Point a few agents at your Jira tickets (or local markdown tickets), watch them work, and only step in when one flags **NEEDS YOU**: a blocking question, a stuck run, or a PR that's ready for your review. You supervise many tickets instead of babysitting one.
+
+Android-native: each agent boots the emulator, runs Gradle, and knows what instrumented tests need. It does one platform for real, not "AI for everything."
 
 ```
-ticket
-  → plan     Claude reads the codebase and writes a plan
-  → implement  Claude edits the code
-  → verify   Gradle compiles + tests run
-  → PR opened, waiting for your review
+magneton · 5 agents · 2 need you
+
+▾ NEEDS YOU (2)
+  ▮ KAN-2   awaiting-answer   Improve content discovery…     5m
+  ✗ KAN-3   failed            Migrate settings to Compose     2m
+▾ RUNNING (2)
+  ● KAN-5   working           Add a logout button            12s
+  ● KAN-8   planning          Fix crash on back navigation     3s
+▾ DONE (1)
+  ✓ KAN-4   review            Mock use case for home screen    7d
 ```
 
-Tickets that hit a blocker or need a decision surface in the dashboard under **NEEDS YOU**. Answer, resume, or fix by hand and re-gate — the orchestrator handles the rest.
+5 agents working, you only touch the 2 that need you. Each agent runs a ticket through **plan → implement → verify** and opens a PR. It asks before it guesses, and **never auto-merges**: it stops at review.
 
 ---
 
