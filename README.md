@@ -4,26 +4,9 @@
 
 # Magneton
 
-**Stop babysitting your coding agent. Start supervising a fleet of them.**
+**Stop babysitting Claude Code for your Android tasks. Start supervising a fleet of them.**
 
-magneton is a TUI for Android devs. Point a few agents at your Jira tickets (or local markdown tickets), watch them work, and only step in when one flags **NEEDS YOU**: a blocking question, a stuck run, or a PR that's ready for your review. You supervise many tickets instead of babysitting one.
-
-Android-native: each agent boots the emulator, runs Gradle, and knows what instrumented tests need. It does one platform for real, not "AI for everything."
-
-```
-magneton · 5 agents · 2 need you
-
-▾ NEEDS YOU (2)
-  ▮ KAN-2   awaiting-answer   Improve content discovery…     5m
-  ✗ KAN-3   failed            Migrate settings to Compose     2m
-▾ RUNNING (2)
-  ● KAN-5   working           Add a logout button            12s
-  ● KAN-8   planning          Fix crash on back navigation     3s
-▾ DONE (1)
-  ✓ KAN-4   review            Mock use case for home screen    7d
-```
-
-5 agents working, you only touch the 2 that need you. Each agent runs a ticket through **plan → implement → verify** and opens a PR. It asks before it guesses, and **never auto-merges**: it stops at review.
+Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (local markdown tickets or Jira, both supported), and each ticket runs through a plan → implement → verify process.  You only step in when one flags NEEDS YOU: a blocking question, or a compilation error or failing unit test the agent cannot figure out on its own.  Each agent runs in parallel on its own worktree, and you can resume its Claude Code session from the TUI or open it directly in Android Studio.
 
 ---
 
