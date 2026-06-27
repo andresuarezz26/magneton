@@ -1,4 +1,6 @@
-<img width="1218" height="606" alt="Screenshot 2026-06-26 at 7 13 02 PM" src="https://github.com/user-attachments/assets/b4562ec2-74db-452e-ae4e-7c084d51f192" />
+
+<img width="1337" height="669" alt="Screenshot 2026-06-26 at 8 05 10 PM" src="https://github.com/user-attachments/assets/50fc8a4b-e9fb-4baf-ad17-a2cffb217bab" />
+
 
 # Magneton
 
