@@ -27,6 +27,14 @@ Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (loc
 
 ---
 
+## Cost
+
+Magneton runs on your existing Claude Code setup. It shells out to the `claude` CLI you already have authenticated, using your own Claude subscription or API key. There is no separate Magneton account, no API key to add, and no markup.
+
+What that means for your bill: each ticket is a full Claude Code session that plans, edits, and verifies the change end to end, so it consumes tokens like a real working session on that task, not a one-shot prompt. Running tickets in parallel multiplies that. Five tickets at once is roughly five concurrent Claude Code sessions worth of usage. On a Pro/Max subscription it counts against those usage limits; on the API it is metered like any other Claude Code work. Start with one ticket to get a feel for the cost before you fan out.
+
+---
+
 ## Install
 
 ### One-paste install (recommended)
@@ -116,3 +124,9 @@ Magneton can pull a ticket's title and description straight from Jira, so you ca
 The token is stored in your OS keychain, not in the config file. For headless or CI use you can set the `MAGNETON_JIRA_TOKEN` environment variable instead.
 
 **3. Verify.** Run `magneton doctor`. It authenticates against your site, and a passing Jira check means you can now run tickets by key.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
