@@ -1,4 +1,6 @@
-# magneton
+<img width="1218" height="606" alt="Screenshot 2026-06-26 at 7 13 02 PM" src="https://github.com/user-attachments/assets/b4562ec2-74db-452e-ae4e-7c084d51f192" />
+
+# Magneton
 
 **Stop babysitting your coding agent. Start supervising a fleet of them.**
 
