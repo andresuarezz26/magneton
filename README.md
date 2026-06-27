@@ -5,7 +5,7 @@
 
 **Stop babysitting one Claude Code agent on your Android app. Start supervising a fleet of them.**
 
-Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (local markdown tickets or Jira, both supported), and each ticket runs through a plan → implement → verify process. You only step in when one flags **NEEDS YOU**: a blocking question, or a compilation error or failing unit test the agent cannot figure out on its own. Each agent runs in parallel on its own worktree, and from the TUI you can resume its Claude Code session or open it directly in Android Studio. Magneton never auto-merges: it stops at review for you to approve.
+Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (local markdown tickets or Jira, both supported), and each ticket runs through a plan → implement → verify process. You only step in when one flags **NEEDS YOU**: a blocking question, or a compilation error or failing unit test the agent cannot figure out on its own. Each agent runs in parallel on its own worktree, and from the TUI you can resume its Claude Code session or open it directly in Android Studio.
 
 ---
 
@@ -49,7 +49,7 @@ magneton init
 
 <img width="1225" height="561" alt="Screenshot 2026-06-26 at 8 22 18 PM" src="https://github.com/user-attachments/assets/120e35d4-f186-49f6-adea-489ca7cab23d" />
 
-3. Paste the path of the local markdown ticket, or the Jira ticket ID if you set up the integration.
+3. Paste the path of the local markdown ticket, or the Jira ticket ID if you set up the integration. You can run multiple tickets at once. Just separate them with a space. 
 
 <img width="992" height="233" alt="Screenshot 2026-06-26 at 8 24 16 PM" src="https://github.com/user-attachments/assets/7baf45bc-1846-4529-9a22-e1c9d8dd6d74" />
 
