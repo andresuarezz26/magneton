@@ -594,17 +594,20 @@ func (m monitorModel) View() string {
 	}
 	var b strings.Builder
 
-	needs := 0
+	needs, running := 0, 0
 	for _, g := range m.groups {
-		if g.label == "NEEDS YOU" {
+		switch g.label {
+		case "NEEDS YOU":
 			needs += len(g.sessions)
+		case "RUNNING":
+			running += len(g.sessions)
 		}
 	}
 	daemon := "○ daemon stopped"
 	if pid, ok := daemonAlive(); ok {
 		daemon = fmt.Sprintf("● daemon pid %d", pid)
 	}
-	b.WriteString(headerStyle.Render(fmt.Sprintf("magneton · %d agents · %d need you", len(m.flat), needs)))
+	b.WriteString(headerStyle.Render(fmt.Sprintf("magneton · %d running · %d needs you", running, needs)))
 	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")+"  ·  "+daemon) + "\n")
 
 	if m.err != nil {

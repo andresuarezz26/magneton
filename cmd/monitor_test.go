@@ -220,10 +220,11 @@ func TestCancelAgentMarksStopped(t *testing.T) {
 	}
 }
 
-// TestHeaderNeedYouCount guards the header's "N need you" tally. STOPPED
-// sessions are manually cancelled and must NOT inflate the count — only the
-// NEEDS YOU group (awaiting-answer / needs-you / failed) counts.
-func TestHeaderNeedYouCount(t *testing.T) {
+// TestHeaderCounts guards the header's two live tallies. "N running" counts
+// only the RUNNING group (in-progress agents), and "N need you" counts only
+// the NEEDS YOU group. STOPPED and DONE sessions are historical and must
+// inflate neither — the header reflects what's happening now, not all time.
+func TestHeaderCounts(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "state.db"))
 	if err != nil {
@@ -232,12 +233,14 @@ func TestHeaderNeedYouCount(t *testing.T) {
 	defer st.Close()
 
 	seed := []struct{ ticket, state string }{
-		{"KAN-1", "needs-you"},        // needs you
-		{"KAN-2", "failed"},           // needs you
-		{"KAN-3", store.StateStopped}, // stopped — must not count
-		{"KAN-4", store.StateStopped}, // stopped — must not count
-		{"KAN-5", store.StateStopped}, // stopped — must not count
-		{"KAN-6", "review"},           // done
+		{"KAN-1", "needs-you"},        // need you
+		{"KAN-2", "failed"},           // need you
+		{"KAN-3", store.StateStopped}, // stopped — counts toward neither
+		{"KAN-4", store.StateStopped}, // stopped — counts toward neither
+		{"KAN-5", store.StateStopped}, // stopped — counts toward neither
+		{"KAN-6", "review"},           // done — counts toward neither
+		{"KAN-7", "working"},          // running
+		{"KAN-8", "planning"},         // running
 	}
 	for _, s := range seed {
 		if _, err := st.Claim(s.ticket, "/repo", s.ticket+" summary"); err != nil {
@@ -255,13 +258,15 @@ func TestHeaderNeedYouCount(t *testing.T) {
 	}
 
 	out := m.View()
-	if !strings.Contains(out, fmt.Sprintf("%d agents", len(seed))) {
-		t.Errorf("header missing agent count %d; got:\n%s", len(seed), out)
+	if !strings.Contains(out, "2 running") {
+		t.Errorf("header should report 2 running (in-progress only); got:\n%s", out)
 	}
-	if !strings.Contains(out, "2 need you") {
-		t.Errorf("header should report 2 need you (stopped excluded); got:\n%s", out)
+	if !strings.Contains(out, "2 needs you") {
+		t.Errorf("header should report 2 needs you (stopped excluded); got:\n%s", out)
 	}
-	if strings.Contains(out, "5 need you") {
-		t.Errorf("header counted STOPPED sessions as need you; got:\n%s", out)
+	// The all-time total (8) must not leak into either tally.
+	if strings.Contains(out, fmt.Sprintf("%d running", len(seed))) ||
+		strings.Contains(out, "5 needs you") {
+		t.Errorf("header counted historical sessions as live; got:\n%s", out)
 	}
 }
