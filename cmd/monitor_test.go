@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,5 +217,51 @@ func TestCancelAgentMarksStopped(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestHeaderNeedYouCount guards the header's "N need you" tally. STOPPED
+// sessions are manually cancelled and must NOT inflate the count — only the
+// NEEDS YOU group (awaiting-answer / needs-you / failed) counts.
+func TestHeaderNeedYouCount(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	seed := []struct{ ticket, state string }{
+		{"KAN-1", "needs-you"},        // needs you
+		{"KAN-2", "failed"},           // needs you
+		{"KAN-3", store.StateStopped}, // stopped — must not count
+		{"KAN-4", store.StateStopped}, // stopped — must not count
+		{"KAN-5", store.StateStopped}, // stopped — must not count
+		{"KAN-6", "review"},           // done
+	}
+	for _, s := range seed {
+		if _, err := st.Claim(s.ticket, "/repo", s.ticket+" summary"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetState(s.ticket, s.state, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := monitorModel{store: st}
+	m.reload()
+	if m.err != nil {
+		t.Fatalf("reload err: %v", m.err)
+	}
+
+	out := m.View()
+	if !strings.Contains(out, fmt.Sprintf("%d agents", len(seed))) {
+		t.Errorf("header missing agent count %d; got:\n%s", len(seed), out)
+	}
+	if !strings.Contains(out, "2 need you") {
+		t.Errorf("header should report 2 need you (stopped excluded); got:\n%s", out)
+	}
+	if strings.Contains(out, "5 need you") {
+		t.Errorf("header counted STOPPED sessions as need you; got:\n%s", out)
 	}
 }

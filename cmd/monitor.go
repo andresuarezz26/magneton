@@ -596,7 +596,7 @@ func (m monitorModel) View() string {
 
 	needs := 0
 	for _, g := range m.groups {
-		if g.label == "NEEDS YOU" || g.label == "STOPPED" {
+		if g.label == "NEEDS YOU" {
 			needs += len(g.sessions)
 		}
 	}
