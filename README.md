@@ -1,4 +1,4 @@
-<img width="1337" height="669" alt="Screenshot 2026-06-26 at 8 05 10 PM" src="https://github.com/user-attachments/assets/50fc8a4b-e9fb-4baf-ad17-a2cffb217bab" />
+<img width="1100" height="679" alt="magneton" src="https://github.com/user-attachments/assets/f27ac84a-4fba-44f8-bd2f-891d474a6a9d" />
 
 
 # Magneton
@@ -28,11 +28,7 @@ I've also used tmux, and I've seen people make it work, but you still have to le
 
 2. Select "Start new ticket(s)".
 
-<img width="1225" height="561" alt="Screenshot 2026-06-26 at 8 22 18 PM" src="https://github.com/user-attachments/assets/120e35d4-f186-49f6-adea-489ca7cab23d" />
-
 3. Paste the path of the local markdown ticket, or the Jira ticket ID if you set up the integration. You can run multiple tickets at once. Just separate them with a space.
-
-<img width="992" height="233" alt="Screenshot 2026-06-26 at 8 24 16 PM" src="https://github.com/user-attachments/assets/7baf45bc-1846-4529-9a22-e1c9d8dd6d74" />
 
 4. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
 
@@ -115,14 +111,13 @@ magneton stop                     # stop the daemon gracefully
 
 ## Configuration
 
-Select "Edit config".
-<img width="1039" height="117" alt="Screenshot 2026-06-26 at 8 27 34 PM" src="https://github.com/user-attachments/assets/d401c322-c616-4000-8e42-01ae01355087" />
+1. Select "Edit config".
 
-You can configure the models used by each stage, the repo url, branch naming convention and Jira setup.
+2. You can configure the models used by each stage, the repo url, branch naming convention and Jira setup.
 <img width="1015" height="400" alt="Screenshot 2026-06-26 at 8 26 30 PM" src="https://github.com/user-attachments/assets/a4b0261a-eb2e-4001-a231-1e047dfaeeb8" />
 Config lives at `~/.agent/config.toml`. Created by `magneton init`, editable any time.
 
-Run `magneton doctor` after any config change to verify connectivity.
+3. Run `magneton doctor` after any config change to verify connectivity.
 
 ---
 
