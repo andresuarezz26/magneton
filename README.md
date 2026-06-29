@@ -5,9 +5,22 @@
 
 **Stop babysitting one Claude Code agent on your Android app. Start supervising a fleet of them.**
 
-Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (local markdown tickets or Jira, both supported), and each ticket runs through a plan → implement → verify process. You only step in when one flags **NEEDS YOU**: a blocking question, or a compilation error or failing unit test the agent cannot figure out on its own. Each agent runs in parallel on its own worktree, and from the TUI you can resume its Claude Code session or open it directly in Android Studio.
+Magneton is the TUI for Android devs using Claude Code. Kick off one or more tickets, and each runs through a plan → implement → verify loop. When it succeeds, it opens a pull request and you just review and test. You only step in when an agent flags **NEEDS YOU**, e.g. a blocking question or a compile error it can't resolve on its own. Each agent runs in parallel, isolated in its own git worktree, and tries to finish the ticket autonomously. From the TUI you can resume its Claude Code session or open it directly in Android Studio to review or change the implementation.
 
 ---
+
+## Motivation
+
+At my company, to prove AI was actually improving developer productivity, management started measuring us by pull requests merged and lines of code added. Flawed metrics, but they're the ones I'm judged on. So I started running Claude Code in parallel with git worktrees to push my numbers up, but I ended up babysitting every agent, and the context switching fried my brain even at 2-3 tickets at a time.
+
+Most of the work wasn't the code, it was the toil around it: switching between terminals to supervise each agent, creating a branch and worktree per ticket, driving plan mode, coordinating a single emulator across runs, asking Claude to compile and run the unit tests, opening the right worktree in Android Studio, picking a model per stage, and writing the PR description. So I built Magneton to keep all of it in one terminal and automate the repetitive parts. Now, if a ticket is well defined, I rarely touch it. I just catch issues in the PR. My numbers roughly doubled once I started using it.
+
+### What about alternatives? 
+
+When I tried Conductor, you still had to actively drive your dev workflow, it's closed-source, and I wanted something local-only. I wanted a tool that runs on its own and pings me only when it gets stuck.
+
+I've also used tmux, and I've seen people make it work, but you still have to learn shortcuts, juggle a wall of terminals, and track everything yourself.
+
 
 ## Quick start
 
@@ -21,11 +34,17 @@ Magneton is a TUI for Android devs using Claude Code. Kick off your tickets (loc
 
 <img width="992" height="233" alt="Screenshot 2026-06-26 at 8 24 16 PM" src="https://github.com/user-attachments/assets/7baf45bc-1846-4529-9a22-e1c9d8dd6d74" />
 
-4. The dashboard shows the ticket's IN-PROGRESS status while the agent works.
+4. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
 
 5. When the agent finishes, the ticket moves to DONE / review with a PR opened, ready for you to approve.
 
 ---
+
+## How it works
+
+Under the hood it's a Go program that drives a deterministic git/worktree flow. Each ticket runs in its own goroutine that moves through plan → implement → verify in sequence (with a self-review pass before it certifies), shelling out to a Claude Code session at each stage. State lives in a local SQLite database, and the TUI polls it every second to refresh status.
+
+For Android specifically, the emulator is a shared resource: a SQLite-backed semaphore lets only one agent hold the emulator at a time to run the app or instrumentation tests while the others wait their turn. No two agents fight over the same device.
 
 ## Cost
 
