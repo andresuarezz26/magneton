@@ -3,9 +3,9 @@
 
 # Magneton
 
-**Stop babysitting one Claude Code agent on your Android app. Start supervising a fleet of them.**
+**A terminal UI for running multiple Claude Code agents on your Android tickets in parallel.**
 
-Magneton is the TUI for Android devs using Claude Code. Kick off one or more tickets, and each runs through a plan → implement → verify loop. When it succeeds, it opens a pull request and you just review and test. You only step in when an agent flags **NEEDS YOU**, e.g. a blocking question or a compile error it can't resolve on its own. Each agent runs in parallel, isolated in its own git worktree, and tries to finish the ticket autonomously. From the TUI you can resume its Claude Code session or open it directly in Android Studio to review or change the implementation.
+Start one or more tickets from the TUI by pasting the path to a local markdown file or a Jira ticket ID, and each runs through a plan → implement → verify loop in its own git worktree, in parallel. When a ticket passes, the agent opens a pull request and you review and test it. When an agent needs you, it flips to **NEEDS YOU**: if it asked a question, you answer it right in the TUI; if it's stuck on something like a compile error it can't resolve, you can resume its Claude Code session or open the worktree in Android Studio to fix it by hand.
 
 ---
 
