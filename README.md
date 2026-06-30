@@ -8,7 +8,7 @@
 Start one or more tickets from the TUI by pasting the path to a local markdown file or a Jira ticket ID, and each runs through a plan → implement → verify loop in its own git worktree, in parallel:
 
 - **Plan** (read-only): reads the codebase, writes a focused plan, flags any genuinely blocking questions, and decides up front whether the ticket needs an emulator (Compose/Espresso, anything under `androidTest/`) or just unit tests.
-- **Implement**: makes the change in the worktree, then an adversarial self-review pass checks the diff for Kotlin idioms, threading, nullability and crash risks, sending fixes back if it finds any.
+- **Implement**: follows the approved plan and makes the focused, minimal change it describes.
 - **Verify**: discovers how your project actually builds (`build.gradle`, `gradle.properties`, CI config, or a company build script, nothing hardcoded), compiles, and runs the tests. If the plan flagged a device it boots an emulator and runs the instrumented tests too; otherwise unit tests only. It marks the ticket green only after it actually sees the build and tests pass.
 
 When a ticket passes, the agent opens a pull request and you review and test it. When an agent needs you, it flips to **NEEDS YOU**: if it asked a question, you answer it right in the TUI; if it's stuck on something like a compile error it can't resolve, you can resume its Claude Code session or open the worktree in Android Studio to fix it by hand.
