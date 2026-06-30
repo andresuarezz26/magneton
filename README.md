@@ -17,9 +17,9 @@ Most of the work wasn't the code, it was the toil around it: switching between t
 
 ### What about alternatives? 
 
-When I tried Conductor, you still had to actively drive your dev workflow, it's closed-source, and I wanted something local-only. I wanted a tool that runs on its own and pings me only when it gets stuck.
+I tried [conductor.build](https://conductor.build), but you still have to actively drive your dev workflow, and it's a closed-source desktop app, while I wanted something open-source I could run in the terminal. I also wanted a tool that runs on its own and pings me only when it gets stuck.
 
-I've also used tmux, and I've seen people make it work, but you still have to learn shortcuts, juggle a wall of terminals, and track everything yourself.
+I've also used tmux, and I've seen people make it work, but you still have to learn shortcuts, manage a lot of terminal windows, and keep track of each agent's state yourself, since there's no single dashboard showing what every agent is doing.
 
 
 ## Quick start
