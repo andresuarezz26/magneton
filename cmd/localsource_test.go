@@ -100,6 +100,126 @@ func TestLoadLocalTicket(t *testing.T) {
 	}
 }
 
+func TestParseTicketContent(t *testing.T) {
+	// H1 title → title + body after it.
+	title, body, err := parseTicketContent("# Add a file\n\nCreate one.txt.\n")
+	if err != nil || title != "Add a file" || body != "Create one.txt." {
+		t.Errorf("h1: title=%q body=%q err=%v", title, body, err)
+	}
+
+	// Generic section header is skipped; title comes from first prose line and
+	// the "# Description" heading stays in the body.
+	title, body, err = parseTicketContent("# Description\n\nUpdate the nav.\n")
+	if err != nil || title != "Update the nav." {
+		t.Errorf("section: title=%q err=%v", title, err)
+	}
+	if !strings.HasPrefix(body, "# Description") {
+		t.Errorf("section: body should retain heading, got %q", body)
+	}
+
+	// No H1 → first non-blank line is the title.
+	title, _, err = parseTicketContent("\nDo the thing\nmore\n")
+	if err != nil || title != "Do the thing" {
+		t.Errorf("noH1: title=%q err=%v", title, err)
+	}
+
+	// Empty content → error.
+	if _, _, err := parseTicketContent("\n  \n"); err == nil {
+		t.Error("empty: expected an error")
+	}
+}
+
+func TestDetectTicketID(t *testing.T) {
+	found := map[string]string{
+		"Please fix PROJ-123 today":                 "PROJ-123",
+		"[ABC-45] Add pull to refresh":              "ABC-45",
+		"see https://x.atlassian.net/browse/PLEX-7": "PLEX-7",
+		"lower proj-9 works":                        "PROJ-9",
+		"# TICKET-4 — Empty State for Saved Papers": "TICKET-4",
+	}
+	for in, want := range found {
+		if got, ok := detectTicketID(in); !ok || got != want {
+			t.Errorf("detectTicketID(%q) = %q,%v want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"Add pull to refresh", "no id here 123", "release v2 build"} {
+		if got, ok := detectTicketID(in); ok {
+			t.Errorf("detectTicketID(%q) unexpectedly matched %q", in, got)
+		}
+	}
+}
+
+func TestIsTicketKey(t *testing.T) {
+	yes := []string{"PROJ-123", "proj-1", "  ABC-45  ", "A1-9"}
+	no := []string{"Add pull to refresh", "PROJ123", "PROJ-", "-1", "", "line1\nPROJ-1"}
+	for _, s := range yes {
+		if !isTicketKey(s) {
+			t.Errorf("isTicketKey(%q) = false, want true", s)
+		}
+	}
+	for _, s := range no {
+		if isTicketKey(s) {
+			t.Errorf("isTicketKey(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestStripIDPrefix(t *testing.T) {
+	cases := []struct{ title, id, want string }{
+		{"TICKET-3 — Add Pull-to-Refresh on Feed", "TICKET-3", "Add Pull-to-Refresh on Feed"},
+		{"PROJ-1: Do the thing", "PROJ-1", "Do the thing"},
+		{"PROJ-1 - fix bug", "PROJ-1", "fix bug"},
+		{"ticket-3 — lower key", "TICKET-3", "lower key"},  // case-insensitive
+		{"Add a file", "TICKET-1", "Add a file"},           // no prefix → unchanged
+		{"TICKET-30 stuff", "TICKET-3", "TICKET-30 stuff"}, // no separator after id → unchanged
+		{"TICKET-3", "TICKET-3", "TICKET-3"},               // title is only the id
+		{"anything", "", "anything"},                       // no id
+	}
+	for _, c := range cases {
+		if got := stripIDPrefix(c.title, c.id); got != c.want {
+			t.Errorf("stripIDPrefix(%q, %q) = %q, want %q", c.title, c.id, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeNewlines(t *testing.T) {
+	if got := normalizeNewlines("a\r\nb\rc\nd"); got != "a\nb\nc\nd" {
+		t.Errorf("normalizeNewlines = %q", got)
+	}
+}
+
+// TestPastedContentCRLF reproduces the real bug: a terminal paste delivers
+// newlines as carriage returns, so without normalization the whole ticket looks
+// like one line and the title/render get corrupted.
+func TestPastedContentCRLF(t *testing.T) {
+	// The ticket the user pasted, with \r line endings as a terminal sends them.
+	raw := "# TICKET-3 — Add Pull-to-Refresh on Feed\r\r## Summary\rAdd pull-to-refresh.\r\r## Priority\rLow\r"
+	blob := normalizeNewlines(raw)
+
+	if n := lineCount(blob); n != 7 {
+		t.Errorf("lineCount = %d, want 7 (paste was seen as 1 line before the fix)", n)
+	}
+	title, _, err := parseTicketContent(blob)
+	if err != nil || title != "TICKET-3 — Add Pull-to-Refresh on Feed" {
+		t.Errorf("title = %q, err = %v", title, err)
+	}
+	if id, ok := detectTicketID(blob); !ok || id != "TICKET-3" {
+		t.Errorf("detectTicketID = %q, %v; want TICKET-3", id, ok)
+	}
+	if strings.ContainsRune(title, '\r') {
+		t.Error("title still contains a carriage return")
+	}
+}
+
+func TestLineCount(t *testing.T) {
+	cases := map[string]int{"": 0, "a": 1, "a\n": 1, "a\nb": 2, "a\nb\n": 2, "\n\n": 0}
+	for in, want := range cases {
+		if got := lineCount(in); got != want {
+			t.Errorf("lineCount(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
 func TestDedupeSpecs(t *testing.T) {
 	in := []ticketSpec{
 		{ticket: "DUP"}, {ticket: "DUP"}, {ticket: "DUP"}, {ticket: "OTHER"},

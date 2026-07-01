@@ -21,6 +21,12 @@ type ticketSpec struct {
 var (
 	h1Re    = regexp.MustCompile(`^#\s+(.*\S)\s*$`)
 	nonIDRe = regexp.MustCompile(`[^A-Z0-9]+`)
+	// ticketIDRe matches a Jira-style key anywhere in text: a project key (a
+	// letter followed by letters/digits) then a dash and a number, e.g. PROJ-123.
+	ticketIDRe = regexp.MustCompile(`\b([A-Za-z][A-Za-z0-9]*-\d+)\b`)
+	// ticketKeyRe is ticketIDRe anchored: the whole (trimmed, single-line) string
+	// IS a bare key. Used to classify a pasted token as a Jira key vs content.
+	ticketKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
 )
 
 // sectionHeads are generic section headings that are not real ticket titles.
@@ -64,11 +70,57 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 	if err != nil {
 		return ticketSpec{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	lines := strings.Split(string(raw), "\n")
+	title, body, err := parseTicketContent(string(raw))
+	if err != nil {
+		return ticketSpec{}, fmt.Errorf("%s: %w", path, err)
+	}
 
-	// Title = first H1 that is a real title (not a generic section header like
-	// "# Description"). Body = everything after that H1.
-	title, body := "", string(raw)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	id := ticketIDFromPath(path)
+	return ticketSpec{
+		ticket:     id,
+		summary:    stripIDPrefix(title, id),
+		desc:       body,
+		local:      true,
+		sourcePath: abs,
+	}, nil
+}
+
+// stripIDPrefix removes a leading ticket-id from a title so it isn't shown (and
+// slugified into the branch) twice. Jira-style titles often read "TICKET-3 — Add
+// X"; with the id already in the chip and the "ai/{ticket}-{slug}" branch, that
+// prefix is redundant. Only strips when a separator (or end) follows the id, so
+// "TICKET-30 …" is left intact when the id is "TICKET-3".
+func stripIDPrefix(title, id string) string {
+	if id == "" {
+		return title
+	}
+	t := strings.TrimSpace(title)
+	if len(t) < len(id) || !strings.EqualFold(t[:len(id)], id) {
+		return title
+	}
+	rest := t[len(id):]
+	if rest == "" {
+		return title // title is only the id
+	}
+	trimmed := strings.TrimLeft(rest, " \t-—–:·|.")
+	if trimmed == rest || trimmed == "" {
+		return title // no separator after the id, or nothing left
+	}
+	return trimmed
+}
+
+// parseTicketContent derives a (title, body) from raw markdown/text ticket
+// content. Title = first H1 ("# ...") that is a real title (not a generic
+// section header like "# Description"), else the first non-blank line of prose.
+// Body = everything after that H1, or the whole content when there is no H1.
+// Shared by loadLocalTicket (file source) and pasted-content tickets (TUI).
+func parseTicketContent(raw string) (title, body string, err error) {
+	lines := strings.Split(raw, "\n")
+	body = raw
 	for i, line := range lines {
 		m := h1Re.FindStringSubmatch(line)
 		if m == nil {
@@ -81,8 +133,6 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 		body = strings.TrimLeft(strings.Join(lines[i+1:], "\n"), "\n")
 		break
 	}
-	// No usable H1 → first line of real prose (skip blank and heading lines so
-	// "# Description" itself is never chosen).
 	if title == "" {
 		for _, line := range lines {
 			s := strings.TrimSpace(line)
@@ -94,20 +144,34 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 		}
 	}
 	if title == "" {
-		return ticketSpec{}, fmt.Errorf("%s: could not derive a title (file is empty?)", path)
+		return "", "", fmt.Errorf("could not derive a title (empty content?)")
 	}
+	return title, strings.TrimSpace(body), nil
+}
 
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = path
+// detectTicketID pulls the first Jira-style key (e.g. PROJ-123) out of free-form
+// ticket text — the instant, offline fast-path before falling back to an AI
+// extraction pass. Returns the id uppercased, or ("", false) when none is found.
+func detectTicketID(content string) (string, bool) {
+	if m := ticketIDRe.FindStringSubmatch(content); m != nil {
+		return strings.ToUpper(m[1]), true
 	}
-	return ticketSpec{
-		ticket:     ticketIDFromPath(path),
-		summary:    title,
-		desc:       strings.TrimSpace(body),
-		local:      true,
-		sourcePath: abs,
-	}, nil
+	return "", false
+}
+
+// normalizeNewlines converts CRLF and lone CR line endings to LF. Terminal
+// bracketed paste transmits newlines as carriage returns, so pasted content
+// arrives with \r; without this, line counting and title parsing see one giant
+// line and stray \r carriage-returns corrupt the on-screen render.
+func normalizeNewlines(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
+// isTicketKey reports whether s (trimmed, single line) is itself a bare Jira key.
+// Used to classify a pasted token as a Jira key rather than ticket content.
+func isTicketKey(s string) bool {
+	return ticketKeyRe.MatchString(strings.TrimSpace(s))
 }
 
 // truncateTitle shortens an over-long body-derived title at a word boundary,

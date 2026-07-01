@@ -71,7 +71,14 @@ func launchHub() error {
 		self = "magneton"
 	}
 
-	m := monitorModel{store: st, jira: jc, tel: tel, selfPath: self, view: initialView}
+	implModel := ""
+	if cfgErr == nil {
+		implModel = cfg.ModelImpl
+	}
+	m := monitorModel{
+		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
+		implModel: implModel, runIDPrompt: -1,
+	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -203,7 +210,10 @@ type monitorModel struct {
 	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
 	view          hubView
 	paletteCursor int
-	runText       string // run-new input buffer
+	runText       string          // run-new typed buffer (a key/path being typed)
+	runTickets    []pendingTicket // accumulated ticket chips awaiting launch
+	runIDPrompt   int             // index of a chip awaiting a typed id; -1 = none
+	implModel     string          // Cfg.ModelImpl, used for paste-time id extraction
 	outputTitle   string
 	outputText    string
 	form          *formModel // active form (config/setup), nil otherwise
@@ -330,6 +340,18 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = msg.action + " daemon: " + msg.err.Error()
 		} else {
 			m.notice = "daemon " + msg.action + "ed"
+		}
+		return m, nil
+	case ticketIDResolvedMsg:
+		// A paste-time id lookup finished. Ignore if the input was already
+		// launched/cancelled (chip index no longer valid).
+		if m.view == viewRunInput && msg.idx >= 0 && msg.idx < len(m.runTickets) {
+			m.runTickets[msg.idx].resolving = false
+			if msg.found {
+				m.runTickets[msg.idx].id = msg.id
+			} else if m.runIDPrompt < 0 {
+				m.runIDPrompt = msg.idx // no id found — ask the user
+			}
 		}
 		return m, nil
 	case claudeClosedMsg:

@@ -13,6 +13,35 @@ import (
 	"strings"
 )
 
+// ExtractTicketID asks Claude to pull a ticket id (e.g. PROJ-123) out of pasted
+// ticket text whose format we can't parse deterministically. It is a lightweight
+// text call — not the stream-json / report.json contract of Run — used at paste
+// time in the TUI when the regex fast-path finds nothing. Returns the trimmed
+// answer, which is "NONE" when the model finds no id. model may be empty (Claude
+// Code's default). anthropicKey may be empty (Claude Code uses its own auth).
+func ExtractTicketID(content, model, anthropicKey string) (string, error) {
+	prompt := "You are given the raw text of a software ticket. Extract its ticket " +
+		"identifier — a project key followed by a number, like PROJ-123 or ABC-45. " +
+		"It may appear anywhere: a heading, brackets, a Jira URL, or inline prose. " +
+		"Reply with ONLY the id in uppercase and nothing else. If there is no clear " +
+		"ticket id, reply with exactly NONE.\n\n--- TICKET ---\n" + content
+
+	args := []string{"-p", prompt, "--output-format", "text"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	cmd := exec.Command("claude", args...)
+	cmd.Env = os.Environ()
+	if anthropicKey != "" {
+		cmd.Env = append(cmd.Env, "ANTHROPIC_API_KEY="+anthropicKey)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("claude extract id: %w", err)
+	}
+	return strings.ToUpper(strings.TrimSpace(string(out))), nil
+}
+
 // Report is the .agent/report.json the session must write as its last step.
 type Report struct {
 	Status       string   `json:"status"` // "ready_for_build" | "needs_human"

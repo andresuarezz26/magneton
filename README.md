@@ -5,7 +5,7 @@
 
 **A terminal UI for running multiple Claude Code agents on your Android tickets in parallel.**
 
-Start one or more tickets from the TUI by pasting the path to a local markdown file or a Jira ticket ID, and each runs through a plan → implement → verify loop in its own git worktree, in parallel:
+Start one or more tickets from the TUI by pasting the ticket itself: its raw content, a local markdown file path, or a Jira ticket ID. Each runs through a plan → implement → verify loop in its own git worktree, in parallel:
 
 - **Plan** (read-only): reads the codebase, writes a focused plan, flags any genuinely blocking questions, and decides up front whether the ticket needs an emulator (Compose/Espresso, anything under `androidTest/`) or just unit tests.
 - **Implement**: follows the approved plan and makes the focused, minimal change it describes.
@@ -34,7 +34,7 @@ I've also used tmux, and I've seen people make it work, but you still have to le
 
 2. Select "Start new ticket(s)".
 
-3. Paste the path of the local markdown ticket, or the Jira ticket ID if you set up the integration. You can run multiple tickets at once. Just separate them with a space.
+3. Paste the ticket straight in: the raw ticket content (copied from Jira, Linear, a doc, wherever), a local markdown file path, or a Jira ticket ID. Magneton works out which it is. For pasted content it detects the ticket ID for branch naming, or asks you for one if it can't find it. Queue several at once by pasting each one; they stack up as `[ID · title · lines]` chips, then press enter to launch them all.
 
 4. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
 

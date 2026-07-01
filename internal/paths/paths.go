@@ -22,6 +22,7 @@ func Worktrees() string { return filepath.Join(Root(), "worktrees") }
 func Logs() string      { return filepath.Join(Root(), "logs") }
 func Templates() string { return filepath.Join(Root(), "templates") }
 func Reports() string   { return filepath.Join(Root(), "reports") }
+func Pasted() string    { return filepath.Join(Root(), "pasted") }
 func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
 func PidFile() string   { return filepath.Join(Root(), "daemon.pid") }
 
@@ -62,7 +63,7 @@ func WriteLocalProperties(dir, sdkPath string) error {
 
 // EnsureDirs creates the directory skeleton if missing.
 func EnsureDirs() error {
-	for _, d := range []string{Root(), Worktrees(), Logs(), Templates(), Reports()} {
+	for _, d := range []string{Root(), Worktrees(), Logs(), Templates(), Reports(), Pasted()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

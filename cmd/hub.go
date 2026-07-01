@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 )
 
@@ -34,6 +38,26 @@ type formDoneMsg struct {
 type runLaunchedMsg struct {
 	text string
 	err  error
+}
+
+// pendingTicket is one queued ticket in the "Start new ticket(s)" input, shown
+// as a chip. kind is content|jira|file.
+type pendingTicket struct {
+	id        string // resolved ticket id; also the typed buffer while prompting
+	title     string // parsed title (or the key itself, for a jira chip)
+	lines     int
+	kind      string // "content" | "jira" | "file"
+	body      string // raw pasted content (content kind)
+	path      string // on-disk path (file kind)
+	resolving bool   // content: async id lookup still in flight
+}
+
+// ticketIDResolvedMsg carries the result of an async paste-time id lookup for
+// the chip at index idx (regex fast-path, then AI extraction).
+type ticketIDResolvedMsg struct {
+	idx   int
+	id    string
+	found bool
 }
 type daemonMsg struct {
 	action string // "start" | "stop"
@@ -117,23 +141,47 @@ func (m monitorModel) renderPalette(w int) string {
 // ---- run-new input ---------------------------------------------------------
 
 func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Sub-mode: typing an id for a chip whose id couldn't be detected.
+	if m.runIDPrompt >= 0 {
+		return m.updateRunIDPrompt(msg)
+	}
+
+	// Bracketed paste arrives as one KeyMsg with the whole blob (newlines
+	// included), so it never trips Enter=launch. Each paste becomes one chip.
+	if msg.Paste {
+		return m.addPastedTicket(string(msg.Runes))
+	}
+
 	switch msg.Type {
 	case tea.KeyEnter:
-		text := strings.TrimSpace(m.runText)
-		m.view = viewDashboard
-		if text == "" {
+		m = m.commitBuffer() // fold any typed key/path into a chip first
+		if len(m.runTickets) == 0 {
+			m.view = viewDashboard
 			return m, nil
 		}
-		return m, m.launchRun(text)
+		if m.anyResolving() {
+			m.notice = "still detecting a ticket id…"
+			return m, nil
+		}
+		tickets := m.runTickets
+		m.view = viewDashboard
+		m.runTickets = nil
+		return m, m.launchRun(tickets)
 	case tea.KeyEsc:
 		m.view = viewDashboard
 		m.runText = ""
+		m.runTickets = nil
+		m.runIDPrompt = -1
 	case tea.KeyBackspace:
 		if r := []rune(m.runText); len(r) > 0 {
 			m.runText = string(r[:len(r)-1])
+		} else if n := len(m.runTickets); n > 0 {
+			m.runTickets = m.runTickets[:n-1] // pop the last chip
 		}
 	case tea.KeySpace:
-		m.runText += " "
+		if strings.TrimSpace(m.runText) != "" {
+			m = m.commitBuffer() // space commits a typed key/path as a chip
+		}
 	case tea.KeyRunes:
 		m.runText += string(msg.Runes)
 	default:
@@ -144,27 +192,242 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// addPastedTicket classifies one pasted blob and appends it as a chip. A bare
+// key or a single-line file path resolve immediately; anything else is treated
+// as ticket content and its id is resolved asynchronously.
+func (m monitorModel) addPastedTicket(blob string) (tea.Model, tea.Cmd) {
+	blob = normalizeNewlines(blob) // terminals paste newlines as \r
+	trimmed := strings.TrimSpace(blob)
+	if trimmed == "" {
+		return m, nil
+	}
+	if isTicketKey(trimmed) {
+		m.runTickets = append(m.runTickets, pendingTicket{
+			id: normalizeTicket(trimmed), title: trimmed, kind: "jira",
+		})
+		return m, nil
+	}
+	if !strings.ContainsRune(trimmed, '\n') {
+		if fi, err := os.Stat(trimmed); err == nil && !fi.IsDir() {
+			m.runTickets = append(m.runTickets, newFileTicket(trimmed))
+			return m, nil
+		}
+	}
+	title, _, err := parseTicketContent(blob)
+	if err != nil || title == "" {
+		title = "(untitled)"
+	}
+	idx := len(m.runTickets)
+	m.runTickets = append(m.runTickets, pendingTicket{
+		title: title, lines: lineCount(blob), kind: "content", body: blob, resolving: true,
+	})
+	return m, m.resolveTicketID(idx, blob)
+}
+
+// commitBuffer folds a typed token (a Jira key or a .md path) into a chip.
+func (m monitorModel) commitBuffer() monitorModel {
+	tok := strings.TrimSpace(m.runText)
+	m.runText = ""
+	if tok == "" {
+		return m
+	}
+	if fi, err := os.Stat(tok); err == nil && !fi.IsDir() {
+		m.runTickets = append(m.runTickets, newFileTicket(tok))
+		return m
+	}
+	m.runTickets = append(m.runTickets, pendingTicket{
+		id: normalizeTicket(tok), title: tok, kind: "jira",
+	})
+	return m
+}
+
+// newFileTicket builds a chip for a .md/text ticket file on disk.
+func newFileTicket(path string) pendingTicket {
+	t := pendingTicket{kind: "file", path: path, title: filepath.Base(path)}
+	if sp, err := loadLocalTicket(path); err == nil {
+		t.id, t.title = sp.ticket, sp.summary
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		t.lines = lineCount(string(raw))
+	}
+	return t
+}
+
+// resolveTicketID looks up a pasted ticket's id: the regex fast-path first, then
+// a Claude extraction pass. The result routes back through Update as a
+// ticketIDResolvedMsg (which either fills the chip or opens the id prompt).
+func (m monitorModel) resolveTicketID(idx int, content string) tea.Cmd {
+	model := m.implModel
+	return func() tea.Msg {
+		if id, ok := detectTicketID(content); ok {
+			return ticketIDResolvedMsg{idx: idx, id: id, found: true}
+		}
+		if id, err := agent.ExtractTicketID(content, model, secrets.Get(secrets.Anthropic)); err == nil {
+			if id != "" && id != "NONE" {
+				return ticketIDResolvedMsg{idx: idx, id: id, found: true}
+			}
+		}
+		return ticketIDResolvedMsg{idx: idx, found: false}
+	}
+}
+
+// updateRunIDPrompt handles typing the id for a pasted ticket whose id could not
+// be detected. The chip's id field doubles as the edit buffer here.
+func (m monitorModel) updateRunIDPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	i := m.runIDPrompt
+	if i < 0 || i >= len(m.runTickets) {
+		m.runIDPrompt = -1
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyEnter:
+		if id := normalizeTicket(m.runTickets[i].id); id != "" {
+			m.runTickets[i].id = id
+			m.runIDPrompt = -1
+		}
+	case tea.KeyEsc:
+		m.runTickets = append(m.runTickets[:i], m.runTickets[i+1:]...) // drop this chip
+		m.runIDPrompt = -1
+	case tea.KeyBackspace:
+		if r := []rune(m.runTickets[i].id); len(r) > 0 {
+			m.runTickets[i].id = string(r[:len(r)-1])
+		}
+	case tea.KeyRunes:
+		m.runTickets[i].id += string(msg.Runes)
+	default:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m monitorModel) anyResolving() bool {
+	for _, t := range m.runTickets {
+		if t.resolving {
+			return true
+		}
+	}
+	return false
+}
+
 func (m monitorModel) renderRunInput(w int) string {
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("  Start new ticket(s)") + "\n")
-	b.WriteString(dimStyle.Render("  ticket key(s) or .md path(s), space-separated") + "\n\n")
+	b.WriteString(dimStyle.Render("  paste a ticket (content, or a key/path); paste again to add more") + "\n\n")
+
+	for i, t := range m.runTickets {
+		var label string
+		if t.kind == "jira" {
+			label = fmt.Sprintf("[%s]", t.id)
+		} else {
+			id := t.id
+			if t.resolving {
+				id = "⋯"
+			} else if id == "" {
+				id = "?"
+			}
+			label = fmt.Sprintf("[%s · %s · %d line%s]", id, truncate(stripIDPrefix(t.title, t.id), 40), t.lines, plural(t.lines))
+		}
+		if i == m.runIDPrompt {
+			label = selStyle.Render(" " + label + " ")
+		}
+		b.WriteString("  " + label + "\n")
+	}
+	if len(m.runTickets) > 0 {
+		b.WriteString("\n")
+	}
+
+	if m.runIDPrompt >= 0 && m.runIDPrompt < len(m.runTickets) {
+		b.WriteString(dimStyle.Render("  no ticket id found — type one for this ticket:") + "\n")
+		b.WriteString("  › " + m.runTickets[m.runIDPrompt].id + "▌\n")
+		b.WriteString("\n  " + dimStyle.Render("enter accept · esc drop this ticket"))
+		return b.String()
+	}
+
 	b.WriteString("  › " + m.runText + "▌\n")
-	b.WriteString("\n  " + dimStyle.Render("enter launch · esc cancel"))
+	b.WriteString("\n  " + dimStyle.Render("paste/type · space add · enter launch · esc cancel"))
 	return b.String()
 }
 
 // launchRun spawns `agent run <args…>` detached; the new session appears in the
-// dashboard and streams to its log (which the detail pane tails).
-func (m monitorModel) launchRun(text string) tea.Cmd {
+// dashboard and streams to its log (which the detail pane tails). Pasted content
+// is written to a temp .md named by its id so it flows through the existing local
+// pipeline; jira keys and file paths pass through as-is.
+func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 	self := m.selfPath
 	return func() tea.Msg {
-		args := append([]string{"run"}, strings.Fields(text)...)
+		args := []string{"run"}
+		for _, t := range tickets {
+			switch t.kind {
+			case "content":
+				path, err := writePastedTicket(t.id, t.body)
+				if err != nil {
+					return runLaunchedMsg{err: err}
+				}
+				args = append(args, path)
+			case "file":
+				args = append(args, t.path)
+			default: // jira
+				args = append(args, t.id)
+			}
+		}
+		if len(args) == 1 {
+			return runLaunchedMsg{err: fmt.Errorf("no tickets to launch")}
+		}
 		c := exec.Command(self, args...)
 		c.Stdout, c.Stderr = nil, nil
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		err := c.Start()
-		return runLaunchedMsg{text: text, err: err}
+		return runLaunchedMsg{text: fmt.Sprintf("%d ticket(s)", len(tickets)), err: err}
 	}
+}
+
+// spawnRun launches `agent run <args…>` detached with pre-split args (no
+// whitespace splitting, so paths with spaces survive). Used for resume/ship/rerun
+// of an existing ticket, where args are a ticket key/path plus optional flags.
+func (m monitorModel) spawnRun(args ...string) tea.Cmd {
+	self := m.selfPath
+	full := append([]string{"run"}, args...)
+	return func() tea.Msg {
+		c := exec.Command(self, full...)
+		c.Stdout, c.Stderr = nil, nil
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		err := c.Start()
+		return runLaunchedMsg{text: strings.Join(args, " "), err: err}
+	}
+}
+
+// writePastedTicket saves a pasted ticket blob to ~/.agent/pasted/<id>.md so the
+// run subprocess can read it as a local ticket (ticketIDFromPath recovers <id>).
+func writePastedTicket(id, body string) (string, error) {
+	if err := paths.EnsureDirs(); err != nil {
+		return "", err
+	}
+	if id == "" {
+		id = "PASTED"
+	}
+	p := filepath.Join(paths.Pasted(), id+".md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// lineCount returns the number of lines in s, ignoring a single trailing newline.
+func lineCount(s string) int {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // ---- doctor output ---------------------------------------------------------

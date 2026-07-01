@@ -132,7 +132,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			if s.SourcePath != "" {
 				arg = s.SourcePath
 			}
-			return m, m.launchRun(arg + " --resume")
+			return m, m.spawnRun(arg, "--resume")
 		}
 	case "ship":
 		if s := m.selected(); s != nil {
@@ -141,7 +141,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			if s.SourcePath != "" {
 				arg = s.SourcePath
 			}
-			return m, m.launchRun(arg + " --ship")
+			return m, m.spawnRun(arg, "--ship")
 		}
 	case "rerun":
 		if s := m.selected(); s != nil {
@@ -150,7 +150,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			if s.SourcePath != "" {
 				arg = s.SourcePath
 			}
-			return m, m.launchRun(arg)
+			return m, m.spawnRun(arg)
 		}
 	case "pause":
 		if s := m.selected(); s != nil {
@@ -166,6 +166,8 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "run":
 		m.view = viewRunInput
 		m.runText = ""
+		m.runTickets = nil
+		m.runIDPrompt = -1
 		m.notice = ""
 	case "doctor":
 		m.notice = "running doctor…"
