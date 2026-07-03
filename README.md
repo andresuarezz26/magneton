@@ -38,11 +38,13 @@ I've also used tmux, and I've seen people make it work, but you still have to le
    - **From Jira** (if you set up the integration): enter the ticket key and Magneton fetches its title and description.
    - **From a .md file**: point at a local markdown ticket.
 
-3. Queue several at once; they stack up as `[ID · title · lines]` chips, then press enter to launch them all.
+3. Optionally choose a **base branch** so this ticket stacks on another. Search your local + remote branches and pick one (or `— none —` for the default). The worktree is created from that branch and its PR targets it, so dependent work stacks cleanly. For paste tickets this is the last step; for Jira/file chips press `ctrl+s` to set it.
 
-4. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
+4. Queue several at once; they stack up as `[ID · title · lines]` chips (a `⤷ branch` suffix shows a chosen base), then press enter to launch them all.
 
-5. When the agent finishes, the ticket moves to DONE / review with a PR opened, ready for you to approve.
+5. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
+
+6. When the agent finishes, the ticket moves to DONE / review with a PR opened, ready for you to approve.
 
 ---
 
@@ -106,8 +108,10 @@ magneton run PROJ-123             # fetch Jira ticket, then plan → implement �
 magneton run PROJ-123 PROJ-124    # run two Jira tickets in parallel
 
 # Flags (work with both Jira keys and markdown files)
-magneton run PROJ-123 --dry-run   # skip push + PR (safe for first runs)
-magneton run PROJ-123 --resume    # re-gate a worktree you fixed by hand, then PR
+magneton run PROJ-123 --dry-run          # skip push + PR (safe for first runs)
+magneton run PROJ-123 --resume           # re-gate a worktree you fixed by hand, then PR
+magneton run PROJ-123 --ship             # skip verification: commit + push + PR from your manual fix
+magneton run PROJ-124 --base ai/proj-123 # stack on another branch (or a ticket id); PR targets it
 
 # Other commands
 magneton doctor                   # connectivity check (Jira, git, claude, gh)
