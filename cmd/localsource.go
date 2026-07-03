@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/andresuarezz26/magneton/internal/paths"
 )
 
 // ticketSpec is one resolved unit of work, from Jira or a local file.
@@ -14,8 +17,9 @@ type ticketSpec struct {
 	ticket     string // CLEAN id, safe for WorktreeFor/branch/LogFor
 	summary    string // may be "" for Jira (filled in after FetchIssue)
 	desc       string
-	local      bool   // true => skip Jira fetch/transition and never comment to Jira
-	sourcePath string // absolute path to the .md file; empty for Jira tickets
+	local      bool     // true => skip Jira fetch/transition and never comment to Jira
+	sourcePath string   // absolute path to the .md file; empty for Jira tickets
+	images     []string // image files attached to the ticket (pasted-content flow)
 }
 
 var (
@@ -86,7 +90,40 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 		desc:       body,
 		local:      true,
 		sourcePath: abs,
+		images:     discoverPastedImages(abs),
 	}, nil
+}
+
+// discoverPastedImages returns sibling image files when the ticket .md lives in a
+// magneton-controlled pasted dir (~/.agent/pasted/<id>/). Returns nil for a user's
+// own .md file, so we never sweep in unrelated images from their repo.
+func discoverPastedImages(mdPath string) []string {
+	dir := filepath.Dir(mdPath)
+	pastedAbs, err := filepath.Abs(paths.Pasted())
+	if err != nil || !strings.HasPrefix(dir, pastedAbs+string(os.PathSeparator)) {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var imgs []string
+	for _, e := range entries {
+		if !e.IsDir() && isImageExt(e.Name()) {
+			imgs = append(imgs, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(imgs)
+	return imgs
+}
+
+// isImageExt reports whether name has a supported image extension.
+func isImageExt(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		return true
+	}
+	return false
 }
 
 // stripIDPrefix removes a leading ticket-id from a title so it isn't shown (and

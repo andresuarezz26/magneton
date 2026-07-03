@@ -182,6 +182,45 @@ func TestStripIDPrefix(t *testing.T) {
 	}
 }
 
+func TestParseDroppedPaths(t *testing.T) {
+	cases := map[string][]string{
+		"/tmp/a.png":                       {"/tmp/a.png"},
+		"/tmp/a.png /tmp/b.jpg":            {"/tmp/a.png", "/tmp/b.jpg"},
+		`/My\ Files/x.png`:                 {"/My Files/x.png"}, // backslash-escaped space
+		`'/My Files/y.png'`:                {"/My Files/y.png"}, // single-quoted
+		`"/a b/z.png"`:                     {"/a b/z.png"},      // double-quoted
+		"/tmp/a.png\n":                     {"/tmp/a.png"},      // trailing newline
+		`'/one two.png' "/three four.png"`: {"/one two.png", "/three four.png"},
+	}
+	for in, want := range cases {
+		got := parseDroppedPaths(in)
+		if len(got) != len(want) {
+			t.Errorf("parseDroppedPaths(%q) = %v, want %v", in, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("parseDroppedPaths(%q)[%d] = %q, want %q", in, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestIsImageExt(t *testing.T) {
+	yes := []string{"a.png", "b.PNG", "c.jpg", "d.jpeg", "e.gif", "f.webp", "/x/y.Png"}
+	no := []string{"a.txt", "b.md", "c", "d.pngx", "notes.png.md"}
+	for _, s := range yes {
+		if !isImageExt(s) {
+			t.Errorf("isImageExt(%q) = false, want true", s)
+		}
+	}
+	for _, s := range no {
+		if isImageExt(s) {
+			t.Errorf("isImageExt(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestNormalizeNewlines(t *testing.T) {
 	if got := normalizeNewlines("a\r\nb\rc\nd"); got != "a\nb\nc\nd" {
 		t.Errorf("normalizeNewlines = %q", got)

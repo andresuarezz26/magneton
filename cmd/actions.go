@@ -164,10 +164,13 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	// --- global ---
 	case "run":
-		m.view = viewRunInput
+		m.view = viewRunMethod
+		m.runMode = ""
+		m.runMethodCursor = 0
 		m.runText = ""
 		m.runTickets = nil
 		m.runIDPrompt = -1
+		m.runImgPrompt = -1
 		m.notice = ""
 	case "doctor":
 		m.notice = "running doctor…"

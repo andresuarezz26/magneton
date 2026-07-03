@@ -239,7 +239,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
-		Store: st,
+		Store: st, Images: sp.images,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in
 	// the TUI/`agent logs` even when stdout/stderr is discarded (TUI-launched).

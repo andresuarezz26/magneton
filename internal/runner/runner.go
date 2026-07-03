@@ -34,6 +34,7 @@ type Task struct {
 	Resume      bool         // verify & ship: continue from the existing worktree, no re-plan/implement
 	Ship        bool         // ship without verifying: trust the human's fix, commit + push + PR directly
 	Store       *store.Store // optional; enables emulator coordination
+	Images      []string     // image files to make the agent see (pasted-content flow)
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
@@ -100,6 +101,11 @@ func Run(t Task, h Hooks) Outcome {
 		logf("[%s] (warn) local.properties: %v", t.Ticket, err)
 	}
 
+	// Copy any attached images into the worktree so the agent's Read tool can view
+	// them, and point the description at them. .agent/ is git-excluded, so the
+	// images never land in the PR.
+	desc := stageImages(t, worktree, logf)
+
 	// 2. PLAN stage — strong model, read-only tools.
 	modelPlan := t.Cfg.ModelPlan
 	modelImpl := t.Cfg.ModelImpl
@@ -114,7 +120,7 @@ func Run(t Task, h Hooks) Outcome {
 		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
-	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, t.Description), planOpts); err != nil {
+	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts); err != nil {
 		logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
 	}
 
@@ -171,7 +177,7 @@ func Run(t Task, h Hooks) Outcome {
 		Logf:         logf,
 	}
 	sessionID, runErr := agent.Run(
-		agent.BuildImplPrompt(t.Ticket, t.Summary, t.Description, plan),
+		agent.BuildImplPrompt(t.Ticket, t.Summary, desc, plan),
 		implOpts)
 	if runErr != nil {
 		logf("[%s] (warn) implement stage exited: %v", t.Ticket, runErr)
@@ -628,6 +634,40 @@ func oneLine(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// stageImages copies the task's attached images into <worktree>/.agent/images and
+// returns the description with a reference section appended so the plan/implement
+// prompts tell the agent to Read them. Returns the plain description on any issue.
+func stageImages(t Task, worktree string, logf func(string, ...interface{})) string {
+	if len(t.Images) == 0 {
+		return t.Description
+	}
+	dir := filepath.Join(worktree, ".agent", "images")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logf("[%s] (warn) image dir: %v", t.Ticket, err)
+		return t.Description
+	}
+	var refs []string
+	for i, src := range t.Images {
+		name := fmt.Sprintf("img-%d%s", i+1, strings.ToLower(filepath.Ext(src)))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			logf("[%s] (warn) read image %s: %v", t.Ticket, src, err)
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			logf("[%s] (warn) write image %s: %v", t.Ticket, name, err)
+			continue
+		}
+		refs = append(refs, ".agent/images/"+name)
+	}
+	if len(refs) == 0 {
+		return t.Description
+	}
+	return t.Description +
+		"\n\nAttached screenshots — use the Read tool to view each before planning and implementing:\n- " +
+		strings.Join(refs, "\n- ")
 }
 
 func slugify(s string) string {

@@ -94,8 +94,8 @@ func TestDoActionTransitions(t *testing.T) {
 	if mm, _ := (monitorModel{}).doAction("menu"); mm.(monitorModel).view != viewPalette {
 		t.Error("menu → palette view")
 	}
-	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunInput {
-		t.Error("run → run-input view")
+	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunMethod {
+		t.Error("run → run-method picker")
 	}
 	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}, cursor: 2}
 	if mm, _ := m.doAction("stop"); mm.(monitorModel).confirming != "K1" {

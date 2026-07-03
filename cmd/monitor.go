@@ -71,13 +71,9 @@ func launchHub() error {
 		self = "magneton"
 	}
 
-	implModel := ""
-	if cfgErr == nil {
-		implModel = cfg.ModelImpl
-	}
 	m := monitorModel{
 		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
-		implModel: implModel, runIDPrompt: -1,
+		runIDPrompt: -1, runImgPrompt: -1,
 	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -208,15 +204,17 @@ type monitorModel struct {
 	confirming string
 
 	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
-	view          hubView
-	paletteCursor int
-	runText       string          // run-new typed buffer (a key/path being typed)
-	runTickets    []pendingTicket // accumulated ticket chips awaiting launch
-	runIDPrompt   int             // index of a chip awaiting a typed id; -1 = none
-	implModel     string          // Cfg.ModelImpl, used for paste-time id extraction
-	outputTitle   string
-	outputText    string
-	form          *formModel // active form (config/setup), nil otherwise
+	view            hubView
+	paletteCursor   int
+	runMode         string          // "" | content | jira | file (active run-input method)
+	runMethodCursor int             // cursor in the run-method picker
+	runText         string          // run-new typed buffer (a key/path/id being typed)
+	runTickets      []pendingTicket // accumulated ticket chips awaiting launch
+	runIDPrompt     int             // index of a content chip confirming its id; -1 = none
+	runImgPrompt    int             // index of a content chip attaching images; -1 = none
+	outputTitle     string
+	outputText      string
+	form            *formModel // active form (config/setup), nil otherwise
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -342,18 +340,6 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "daemon " + msg.action + "ed"
 		}
 		return m, nil
-	case ticketIDResolvedMsg:
-		// A paste-time id lookup finished. Ignore if the input was already
-		// launched/cancelled (chip index no longer valid).
-		if m.view == viewRunInput && msg.idx >= 0 && msg.idx < len(m.runTickets) {
-			m.runTickets[msg.idx].resolving = false
-			if msg.found {
-				m.runTickets[msg.idx].id = msg.id
-			} else if m.runIDPrompt < 0 {
-				m.runIDPrompt = msg.idx // no id found — ask the user
-			}
-		}
-		return m, nil
 	case claudeClosedMsg:
 		if msg.err != nil {
 			m.notice = "open Claude Code: " + msg.err.Error()
@@ -383,6 +369,8 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateConsent(msg)
 	case viewPalette:
 		return m.updatePalette(msg)
+	case viewRunMethod:
+		return m.updateRunMethod(msg)
 	case viewRunInput:
 		return m.updateRunInput(msg)
 	case viewOutput:
@@ -644,6 +632,8 @@ func (m monitorModel) View() string {
 		body = m.renderConsent(w)
 	case viewPalette:
 		body = m.renderPalette(w)
+	case viewRunMethod:
+		body = m.renderRunMethod(w)
 	case viewRunInput:
 		body = m.renderRunInput(w)
 	case viewOutput:

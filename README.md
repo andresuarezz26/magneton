@@ -5,7 +5,7 @@
 
 **A terminal UI for running multiple Claude Code agents on your Android tickets in parallel.**
 
-Start one or more tickets from the TUI by pasting the ticket itself: its raw content, a local markdown file path, or a Jira ticket ID. Each runs through a plan → implement → verify loop in its own git worktree, in parallel:
+Start one or more tickets from the TUI. You choose how to add each one: paste the ticket's raw content, enter a Jira key, or point at a local markdown file. Each runs through a plan → implement → verify loop in its own git worktree, in parallel:
 
 - **Plan** (read-only): reads the codebase, writes a focused plan, flags any genuinely blocking questions, and decides up front whether the ticket needs an emulator (Compose/Espresso, anything under `androidTest/`) or just unit tests.
 - **Implement**: follows the approved plan and makes the focused, minimal change it describes.
@@ -32,9 +32,13 @@ I've also used tmux, and I've seen people make it work, but you still have to le
 
 1. Type `magneton` in the terminal to open the TUI.
 
-2. Select "Start new ticket(s)".
+2. Select "Start new ticket(s)" and pick how you want to add the ticket:
 
-3. Paste the ticket straight in: the raw ticket content (copied from Jira, Linear, a doc, wherever), a local markdown file path, or a Jira ticket ID. Magneton works out which it is. For pasted content it detects the ticket ID for branch naming, or asks you for one if it can't find it. Queue several at once by pasting each one; they stack up as `[ID · title · lines]` chips, then press enter to launch them all.
+   - **Paste ticket content** (copied from Jira, Linear, a doc, wherever). Magneton pulls the ticket ID out of the text for branch naming and asks you to confirm it, so you can fix it when it grabbed the epic instead of the ticket. You can then drag screenshots into the terminal to attach them, so the agent sees them while it plans.
+   - **From Jira** (if you set up the integration): enter the ticket key and Magneton fetches its title and description.
+   - **From a .md file**: point at a local markdown ticket.
+
+3. Queue several at once; they stack up as `[ID · title · lines]` chips, then press enter to launch them all.
 
 4. The dashboard shows each ticket's IN-PROGRESS status and live logs of what the agent is doing.
 
