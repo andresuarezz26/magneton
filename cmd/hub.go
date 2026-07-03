@@ -441,9 +441,13 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.launchOrClose()
 		}
 	case tea.KeyEsc:
-		m.runStackPrompt, m.stackFilter, m.stackCursor = -1, "", 0 // no stack = default
+		// Esc means "cancel the creation", not "launch with the default base".
+		// For content (the stack step is the last in a linear finalize chain)
+		// abort the whole creation. For jira/file the picker was opened via
+		// ctrl+s on an existing chip list, so just close it and keep the chips.
+		m.runStackPrompt, m.stackFilter, m.stackCursor = -1, "", 0
 		if isContentTicket {
-			return m.launchOrClose()
+			return m.cancelRunInput(), nil
 		}
 	case tea.KeyUp:
 		if m.stackCursor > 0 {
@@ -472,7 +476,7 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m monitorModel) renderRunStack(w int) string {
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
-	b.WriteString(dimStyle.Render("  the PR will target this branch instead of the default — press esc to skip") + "\n\n")
+	b.WriteString(dimStyle.Render("  the PR will target this branch — pick “— none —” for the default, esc cancels") + "\n\n")
 
 	// Show existing chips for context.
 	for _, t := range m.runTickets {
@@ -482,7 +486,13 @@ func (m monitorModel) renderRunStack(w int) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("  filter › " + m.stackFilter + "▌\n\n")
+	// Search box: the user types to filter the branch list below.
+	b.WriteString(headerStyle.Render("  Search branches") + "\n")
+	placeholder := ""
+	if m.stackFilter == "" {
+		placeholder = dimStyle.Render("type to search…")
+	}
+	b.WriteString("  🔍 " + m.stackFilter + "▌ " + placeholder + "\n\n")
 	list := m.filteredBranches()
 	maxShow := 12
 	start := 0
@@ -503,7 +513,10 @@ func (m monitorModel) renderRunStack(w int) string {
 		}
 		b.WriteString(truncate(line, w) + "\n")
 	}
-	b.WriteString("\n  " + dimStyle.Render("type to filter · ↑↓ move · enter select · esc none"))
+	if len(list) == 1 { // only the "none" row survived the filter
+		b.WriteString("  " + dimStyle.Render("(no branches match your search)") + "\n")
+	}
+	b.WriteString("\n  " + dimStyle.Render("type to search · ↑↓ move · enter select · esc cancel"))
 	return b.String()
 }
 

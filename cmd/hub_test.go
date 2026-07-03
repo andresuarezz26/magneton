@@ -3,9 +3,104 @@ package cmd
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/paths"
 )
+
+// stackModel builds a monitorModel parked on the stack-picker sub-step for one
+// pending ticket of the given kind, with a single selectable branch.
+func stackModel(kind string) monitorModel {
+	return monitorModel{
+		view:           viewRunInput,
+		runMode:        kind,
+		runTickets:     []pendingTicket{{id: "LOCAL-9", kind: kind, title: "t", lines: 1}},
+		runStackPrompt: 0,
+		stackBranches:  []git.Branch{{Name: "ai/parent"}},
+	}
+}
+
+// Regression: pressing Esc in the stack picker must CANCEL the creation, never
+// launch the ticket. Previously Esc on a content ticket auto-launched it.
+func TestStackEscCancelsContentDoesNotLaunch(t *testing.T) {
+	m := stackModel("content")
+	nm, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEsc})
+	hub := nm.(monitorModel)
+	if cmd != nil {
+		t.Error("Esc on a content stack step returned a command — it must not launch")
+	}
+	if hub.view != viewDashboard {
+		t.Errorf("Esc should return to the dashboard, got view=%d", hub.view)
+	}
+	if hub.runTickets != nil {
+		t.Errorf("Esc should clear pending tickets, got %+v", hub.runTickets)
+	}
+	if hub.runStackPrompt != -1 {
+		t.Errorf("Esc should reset runStackPrompt to -1, got %d", hub.runStackPrompt)
+	}
+}
+
+// Enter on a content stack step is the last finalize action → it launches
+// (returns a non-nil command).
+func TestStackEnterContentLaunches(t *testing.T) {
+	m := stackModel("content")
+	m.stackCursor = 0 // the "— none —" row
+	_, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Error("Enter on a content stack step should launch (non-nil command)")
+	}
+}
+
+// Enter selecting a real branch records it on the chip. Using a jira chip so the
+// picker just closes (no launch) and we can inspect the resulting base.
+func TestStackEnterSetsBase(t *testing.T) {
+	m := stackModel("jira")
+	m.stackCursor = 1 // list = [none, ai/parent] → pick ai/parent
+	nm, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if cmd != nil {
+		t.Error("Enter on a jira stack step should not launch")
+	}
+	if len(hub.runTickets) != 1 || hub.runTickets[0].base != "ai/parent" {
+		t.Errorf("expected base ai/parent, got %+v", hub.runTickets)
+	}
+	if hub.runStackPrompt != -1 {
+		t.Errorf("picker should close (runStackPrompt=-1), got %d", hub.runStackPrompt)
+	}
+}
+
+// Enter on the "— none —" row leaves the base empty (default) and does not launch.
+func TestStackEnterNoneKeepsDefault(t *testing.T) {
+	m := stackModel("jira")
+	m.stackCursor = 0 // the "— none —" row
+	nm, _ := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if len(hub.runTickets) != 1 || hub.runTickets[0].base != "" {
+		t.Errorf("none row should leave base empty, got %+v", hub.runTickets)
+	}
+}
+
+// Esc on a jira/file stack step (opened via ctrl+s over a chip list) only closes
+// the picker; it must NOT cancel the whole batch or drop the chips.
+func TestStackEscJiraKeepsChips(t *testing.T) {
+	m := stackModel("jira")
+	nm, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEsc})
+	hub := nm.(monitorModel)
+	if cmd != nil {
+		t.Error("Esc on a jira stack step should not launch")
+	}
+	if hub.view != viewRunInput {
+		t.Errorf("Esc on jira should stay in run-input, got view=%d", hub.view)
+	}
+	if len(hub.runTickets) != 1 {
+		t.Errorf("Esc on jira should keep the chips, got %+v", hub.runTickets)
+	}
+	if hub.runStackPrompt != -1 {
+		t.Errorf("picker should close (runStackPrompt=-1), got %d", hub.runStackPrompt)
+	}
+}
 
 func TestConfigFieldsRoundTrip(t *testing.T) {
 	in := &config.Config{
