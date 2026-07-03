@@ -71,6 +71,62 @@ func TestCreateWorktreeIdempotent(t *testing.T) {
 	}
 }
 
+func TestBranches(t *testing.T) {
+	repo := setupRepo(t)
+	must := func(dir string, args ...string) {
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// Create a local-only branch to test dedup logic.
+	must(repo, "checkout", "-b", "feature/local-only")
+	must(repo, "checkout", "main")
+	// Push a remote branch the local side doesn't have locally.
+	must(repo, "push", "origin", "HEAD:refs/heads/feature/remote-only")
+	must(repo, "fetch", "origin")
+
+	branches, err := Branches(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Branch{}
+	for _, b := range branches {
+		byName[b.Name] = b
+	}
+
+	// main: exists locally and remotely → should appear as local.
+	if b, ok := byName["main"]; !ok || b.Remote {
+		t.Errorf("main: want local, got %+v ok=%v", b, ok)
+	}
+	// local-only branch.
+	if b, ok := byName["feature/local-only"]; !ok || b.Remote {
+		t.Errorf("feature/local-only: want local, got %+v ok=%v", b, ok)
+	}
+	// remote-only branch.
+	if b, ok := byName["feature/remote-only"]; !ok || !b.Remote {
+		t.Errorf("feature/remote-only: want remote, got %+v ok=%v", b, ok)
+	}
+	// origin/HEAD sentinel must not appear.
+	if _, ok := byName["HEAD"]; ok {
+		t.Error("HEAD sentinel should be filtered out")
+	}
+}
+
+func TestRefExists(t *testing.T) {
+	repo := setupRepo(t)
+	if !RefExists(repo, "main") {
+		t.Error("main should exist")
+	}
+	if !RefExists(repo, "origin/main") {
+		t.Error("origin/main should exist")
+	}
+	if RefExists(repo, "no-such-branch-xyz") {
+		t.Error("no-such-branch-xyz should not exist")
+	}
+}
+
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil

@@ -53,7 +53,7 @@ func TestConfigActionOpensForm(t *testing.T) {
 	if hub.view != viewForm || hub.form == nil {
 		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)
 	}
-	if len(hub.form.fields) != 7 {
-		t.Errorf("config form should have 7 fields, got %d", len(hub.form.fields))
+	if len(hub.form.fields) != 8 {
+		t.Errorf("config form should have 8 fields, got %d", len(hub.form.fields))
 	}
 }

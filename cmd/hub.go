@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 )
@@ -50,6 +51,7 @@ type pendingTicket struct {
 	body   string   // raw pasted content (content kind)
 	path   string   // on-disk path (file kind)
 	images []string // attached image files (content kind)
+	base   string   // chosen base branch name (bare); "" = default
 }
 type daemonMsg struct {
 	action string // "start" | "stop"
@@ -192,6 +194,9 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.runImgPrompt >= 0 {
 		return m.updateRunImgAttach(msg)
 	}
+	if m.runStackPrompt >= 0 {
+		return m.updateRunStack(msg)
+	}
 	switch m.runMode {
 	case "content":
 		return m.updateRunContent(msg)
@@ -206,7 +211,9 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m monitorModel) cancelRunInput() monitorModel {
 	m.view = viewDashboard
-	m.runMode, m.runText, m.runTickets, m.runIDPrompt, m.runImgPrompt = "", "", nil, -1, -1
+	m.runMode, m.runText, m.runTickets = "", "", nil
+	m.runIDPrompt, m.runImgPrompt, m.runStackPrompt = -1, -1, -1
+	m.stackBranches, m.stackFilter, m.stackCursor = nil, "", 0
 	return m
 }
 
@@ -286,8 +293,14 @@ func (m monitorModel) updateRunTokens(msg tea.KeyMsg, kind string) (tea.Model, t
 	case tea.KeyRunes:
 		m.runText += string(msg.Runes)
 	default:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+s":
+			// Open the stack picker for the last chip, if any.
+			if n := len(m.runTickets); n > 0 {
+				return m.openStackPicker(n - 1)
+			}
 		}
 	}
 	return m, nil
@@ -338,10 +351,17 @@ func (m monitorModel) updateRunImgAttach(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m = m.attachImages(i, m.runText)
 			m.runText = ""
 		} else {
-			m.runImgPrompt = -1 // empty enter = done with this ticket
+			m.runImgPrompt = -1
+			// Content tickets: advance to the stack picker.
+			if m.runTickets[i].kind == "content" {
+				return m.openStackPicker(i)
+			}
 		}
 	case tea.KeyEsc:
 		m.runImgPrompt, m.runText = -1, ""
+		if i < len(m.runTickets) && m.runTickets[i].kind == "content" {
+			return m.openStackPicker(i)
+		}
 	case tea.KeyBackspace:
 		if r := []rune(m.runText); len(r) > 0 {
 			m.runText = string(r[:len(r)-1])
@@ -365,6 +385,147 @@ func (m monitorModel) attachImages(i int, s string) monitorModel {
 		}
 	}
 	return m
+}
+
+// openStackPicker loads branch list and enters the stack sub-step for chip i.
+func (m monitorModel) openStackPicker(i int) (tea.Model, tea.Cmd) {
+	repoPath := ""
+	if cfg, err := config.Load(); err == nil && len(cfg.Repos) > 0 {
+		repoPath = cfg.Repos[0].Path
+	}
+	branches, _ := git.Branches(repoPath) // best-effort; empty list = picker is empty
+	m.stackBranches = branches
+	m.stackFilter = ""
+	m.stackCursor = 0
+	m.runStackPrompt = i
+	return m, nil
+}
+
+// filteredBranches returns the picker list: a sentinel "none" row followed by
+// branches whose name contains the current filter (case-insensitive).
+func (m monitorModel) filteredBranches() []git.Branch {
+	none := git.Branch{Name: "— none (default base) —"}
+	if m.stackFilter == "" {
+		return append([]git.Branch{none}, m.stackBranches...)
+	}
+	f := strings.ToLower(m.stackFilter)
+	out := []git.Branch{none}
+	for _, b := range m.stackBranches {
+		if strings.Contains(strings.ToLower(b.Name), f) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	i := m.runStackPrompt
+	if i < 0 || i >= len(m.runTickets) {
+		m.runStackPrompt = -1
+		return m, nil
+	}
+	isContentTicket := i < len(m.runTickets) && m.runTickets[i].kind == "content"
+	list := m.filteredBranches()
+	switch msg.Type {
+	case tea.KeyEnter:
+		if m.stackCursor < len(list) {
+			b := list[m.stackCursor]
+			if b.Name != "— none (default base) —" {
+				m.runTickets[i].base = b.Name
+			}
+		}
+		m.runStackPrompt, m.stackFilter, m.stackCursor = -1, "", 0
+		// Content tickets: the stack step is the last in the finalize chain.
+		// Auto-launch so the user doesn't need a second Enter.
+		if isContentTicket {
+			return m.launchOrClose()
+		}
+	case tea.KeyEsc:
+		m.runStackPrompt, m.stackFilter, m.stackCursor = -1, "", 0 // no stack = default
+		if isContentTicket {
+			return m.launchOrClose()
+		}
+	case tea.KeyUp:
+		if m.stackCursor > 0 {
+			m.stackCursor--
+		}
+	case tea.KeyDown:
+		if m.stackCursor < len(list)-1 {
+			m.stackCursor++
+		}
+	case tea.KeyBackspace:
+		if r := []rune(m.stackFilter); len(r) > 0 {
+			m.stackFilter = string(r[:len(r)-1])
+			m.stackCursor = 0
+		}
+	case tea.KeyRunes:
+		m.stackFilter += string(msg.Runes)
+		m.stackCursor = 0
+	default:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m monitorModel) renderRunStack(w int) string {
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
+	b.WriteString(dimStyle.Render("  the PR will target this branch instead of the default — press esc to skip") + "\n\n")
+
+	// Show existing chips for context.
+	for _, t := range m.runTickets {
+		b.WriteString("  " + chipLabel(t) + "\n")
+	}
+	if len(m.runTickets) > 0 {
+		b.WriteString("\n")
+	}
+
+	b.WriteString("  filter › " + m.stackFilter + "▌\n\n")
+	list := m.filteredBranches()
+	maxShow := 12
+	start := 0
+	if m.stackCursor >= maxShow {
+		start = m.stackCursor - maxShow + 1
+	}
+	for idx := start; idx < len(list) && idx < start+maxShow; idx++ {
+		br := list[idx]
+		tag := ""
+		if br.Remote {
+			tag = dimStyle.Render(" (remote)")
+		} else if br.Name != "— none (default base) —" {
+			tag = dimStyle.Render(" (local)")
+		}
+		line := "   " + br.Name + tag
+		if idx == m.stackCursor {
+			line = selStyle.Render(" "+br.Name) + tag
+		}
+		b.WriteString(truncate(line, w) + "\n")
+	}
+	b.WriteString("\n  " + dimStyle.Render("type to filter · ↑↓ move · enter select · esc none"))
+	return b.String()
+}
+
+// chipLabel renders a pending ticket chip label (shared by renderRunInput and renderRunStack).
+func chipLabel(t pendingTicket) string {
+	if t.kind == "jira" {
+		lbl := fmt.Sprintf("[%s]", t.id)
+		if t.base != "" {
+			lbl = fmt.Sprintf("[%s ⤷ %s]", t.id, t.base)
+		}
+		return lbl
+	}
+	id := t.id
+	if id == "" {
+		id = "?"
+	}
+	suffix := imgSuffix(len(t.images))
+	if t.base != "" {
+		suffix += " ⤷ " + t.base
+	}
+	return fmt.Sprintf("[%s · %s · %d line%s%s]",
+		id, truncate(stripIDPrefix(t.title, t.id), 40), t.lines, plural(t.lines), suffix)
 }
 
 // updateRunIDPrompt: confirm/fix the pre-filled id for a pasted content ticket.
@@ -403,20 +564,13 @@ func (m monitorModel) updateRunIDPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m monitorModel) renderRunInput(w int) string {
+	if m.runStackPrompt >= 0 {
+		return m.renderRunStack(w)
+	}
 	var b strings.Builder
 	chips := func() {
 		for i, t := range m.runTickets {
-			var label string
-			if t.kind == "jira" {
-				label = fmt.Sprintf("[%s]", t.id)
-			} else {
-				id := t.id
-				if id == "" {
-					id = "?"
-				}
-				label = fmt.Sprintf("[%s · %s · %d line%s%s]",
-					id, truncate(stripIDPrefix(t.title, t.id), 40), t.lines, plural(t.lines), imgSuffix(len(t.images)))
-			}
+			label := chipLabel(t)
 			if i == m.runIDPrompt || i == m.runImgPrompt {
 				label = selStyle.Render(" " + label + " ")
 			}
@@ -451,13 +605,13 @@ func (m monitorModel) renderRunInput(w int) string {
 		b.WriteString(dimStyle.Render("  type/paste Jira key(s); space adds more") + "\n\n")
 		chips()
 		b.WriteString("  › " + m.runText + "▌\n")
-		b.WriteString("\n  " + dimStyle.Render("space add · enter launch · esc cancel"))
+		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
 	case "file":
 		b.WriteString(headerStyle.Render("  From .md file") + "\n")
 		b.WriteString(dimStyle.Render("  type/drag a path to a .md ticket; space adds more") + "\n\n")
 		chips()
 		b.WriteString("  › " + m.runText + "▌\n")
-		b.WriteString("\n  " + dimStyle.Render("space add · enter launch · esc cancel"))
+		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
 	default: // content
 		b.WriteString(headerStyle.Render("  Paste ticket content") + "\n")
 		b.WriteString(dimStyle.Render("  paste a ticket; you'll confirm its id and attach images") + "\n\n")
@@ -467,27 +621,60 @@ func (m monitorModel) renderRunInput(w int) string {
 	return b.String()
 }
 
-// launchRun spawns `agent run <args…>` detached; the new session appears in the
-// dashboard and streams to its log (which the detail pane tails). Pasted content
-// is written to a temp .md named by its id so it flows through the existing local
-// pipeline; jira keys and file paths pass through as-is.
+// launchRun spawns `agent run <args…>` detached. When any ticket has a stack
+// base set, each ticket gets its own subprocess (so --base can be per-ticket);
+// otherwise all tickets share one batched call.
 func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 	self := m.selfPath
 	return func() tea.Msg {
-		args := []string{"run"}
+		anyStacked := false
 		for _, t := range tickets {
+			if t.base != "" {
+				anyStacked = true
+				break
+			}
+		}
+
+		ticketArg := func(t pendingTicket) (string, error) {
 			switch t.kind {
 			case "content":
-				path, err := writePastedTicket(t.id, t.body, t.images)
+				return writePastedTicket(t.id, t.body, t.images)
+			case "file":
+				return t.path, nil
+			default:
+				return t.id, nil
+			}
+		}
+
+		if anyStacked {
+			// One subprocess per ticket so --base can differ per chip.
+			for _, t := range tickets {
+				arg, err := ticketArg(t)
 				if err != nil {
 					return runLaunchedMsg{err: err}
 				}
-				args = append(args, path)
-			case "file":
-				args = append(args, t.path)
-			default: // jira
-				args = append(args, t.id)
+				cmdArgs := []string{"run", arg}
+				if t.base != "" {
+					cmdArgs = append(cmdArgs, "--base", t.base)
+				}
+				c := exec.Command(self, cmdArgs...)
+				c.Stdout, c.Stderr = nil, nil
+				c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				if err := c.Start(); err != nil {
+					return runLaunchedMsg{err: err}
+				}
 			}
+			return runLaunchedMsg{text: fmt.Sprintf("%d ticket(s)", len(tickets))}
+		}
+
+		// Batch: no stacking, one process.
+		args := []string{"run"}
+		for _, t := range tickets {
+			arg, err := ticketArg(t)
+			if err != nil {
+				return runLaunchedMsg{err: err}
+			}
+			args = append(args, arg)
 		}
 		if len(args) == 1 {
 			return runLaunchedMsg{err: fmt.Errorf("no tickets to launch")}
@@ -726,6 +913,7 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Jira email", value: cfg.JiraEmail},
 		{label: "Repo path", value: repo.Path},
 		{label: "Branch", value: repo.Branch},
+		{label: "Base branch (e.g. main)", value: repo.Base},
 		{label: "Model · plan (blank = default)", value: cfg.ModelPlan},
 		{label: "Model · implement (blank = default)", value: cfg.ModelImpl},
 		{label: "Model · review (blank = default)", value: cfg.ModelReview},
@@ -742,9 +930,10 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	cfg.JiraEmail = f[1].value
 	repo.Path = f[2].value
 	repo.Branch = f[3].value
-	cfg.ModelPlan = f[4].value
-	cfg.ModelImpl = f[5].value
-	cfg.ModelReview = f[6].value
+	repo.Base = f[4].value
+	cfg.ModelPlan = f[5].value
+	cfg.ModelImpl = f[6].value
+	cfg.ModelReview = f[7].value
 	cfg.Repos = []config.Repo{repo}
 }
 

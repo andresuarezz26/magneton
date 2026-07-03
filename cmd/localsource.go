@@ -20,6 +20,7 @@ type ticketSpec struct {
 	local      bool     // true => skip Jira fetch/transition and never comment to Jira
 	sourcePath string   // absolute path to the .md file; empty for Jira tickets
 	images     []string // image files attached to the ticket (pasted-content flow)
+	stackBase  string   // bare base branch name for stacked diffs; "" = default
 }
 
 var (

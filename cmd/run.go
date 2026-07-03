@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ var (
 	runDesc   string
 	runResume bool
 	runShip   bool
+	runBase   string
 )
 
 func init() {
@@ -41,6 +43,7 @@ func init() {
 	c.Flags().StringVar(&runDesc, "desc", "", "ticket description (with --local)")
 	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
 	c.Flags().BoolVar(&runShip, "ship", false, "ship without verifying: trust your manual fix, commit + push + PR directly (use when verification itself is unreliable in the worktree)")
+	c.Flags().StringVar(&runBase, "base", "", "base branch (or ticket id) to stack on; overrides config default")
 	rootCmd.AddCommand(c)
 }
 
@@ -130,11 +133,12 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 			if err != nil {
 				return nil, err
 			}
+			sp.stackBase = runBase
 			specs = append(specs, sp)
 			continue
 		}
 		// (3) Jira ticket key.
-		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg)})
+		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg), stackBase: runBase})
 	}
 
 	return dedupeSpecs(specs), nil
@@ -236,10 +240,21 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 		hooks.Comment = localPlanComment(logf, sp.ticket)
 	}
 
+	// Resolve the stack base: if the caller typed a ticket id, look up its branch;
+	// otherwise treat the value as a bare branch name and pass it through.
+	resolvedBase := sp.stackBase
+	if resolvedBase != "" {
+		if sess, err := st.Get(strings.ToUpper(resolvedBase)); err == nil &&
+			sess != nil && sess.Branch != "" {
+			resolvedBase = sess.Branch // ticket id → branch name
+		}
+		_ = st.SetBaseBranch(sp.ticket, resolvedBase)
+	}
+
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
-		Store: st, Images: sp.images,
+		Store: st, Images: sp.images, Base: resolvedBase,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in
 	// the TUI/`agent logs` even when stdout/stderr is discarded (TUI-launched).

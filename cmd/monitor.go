@@ -73,7 +73,7 @@ func launchHub() error {
 
 	m := monitorModel{
 		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
-		runIDPrompt: -1, runImgPrompt: -1,
+		runIDPrompt: -1, runImgPrompt: -1, runStackPrompt: -1,
 	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -212,6 +212,10 @@ type monitorModel struct {
 	runTickets      []pendingTicket // accumulated ticket chips awaiting launch
 	runIDPrompt     int             // index of a content chip confirming its id; -1 = none
 	runImgPrompt    int             // index of a content chip attaching images; -1 = none
+	runStackPrompt  int             // index of a chip choosing its stack base; -1 = none
+	stackBranches   []git.Branch    // loaded once when the stack picker opens
+	stackFilter     string          // search filter in the stack picker
+	stackCursor     int             // cursor row in the filtered branch list
 	outputTitle     string
 	outputText      string
 	form            *formModel // active form (config/setup), nil otherwise
@@ -718,6 +722,9 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		b.WriteString(sepStyle.Render(truncate(hdr+" "+strings.Repeat("─", w), w)) + "\n")
 		if sel.Summary != "" {
 			b.WriteString(headerStyle.Render(truncate("  "+sel.Summary, w)) + "\n")
+		}
+		if sel.BaseBranch != "" {
+			b.WriteString(dimStyle.Render("  stacked on: "+sel.BaseBranch) + "\n")
 		}
 		for _, ln := range whyLines(*sel) {
 			b.WriteString(whyStyle.Render(truncate(ln, w)) + "\n")

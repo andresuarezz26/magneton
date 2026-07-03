@@ -65,6 +65,7 @@ type Session struct {
 	SessionID  string // Claude session ID for cross-stage resume
 	PID        int    // OS pid of the process driving this session (0 = unknown)
 	SourcePath string // .md file path for local tickets; empty for Jira tickets
+	BaseBranch string // stacked-diff base branch name (bare, no origin/ prefix); "" = default
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
@@ -111,6 +112,7 @@ func Open(path string) (*Store, error) {
 	db.Exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE sessions ADD COLUMN pid INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE sessions ADD COLUMN source_path TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -162,6 +164,15 @@ func (s *Store) SetSourcePath(ticket, path string) error {
 	return err
 }
 
+// SetBaseBranch records the (bare) base branch for a stacked-diff ticket.
+func (s *Store) SetBaseBranch(ticket, base string) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET base_branch=?, updated_at=? WHERE ticket=?`,
+		base, time.Now().Unix(), ticket,
+	)
+	return err
+}
+
 // SetPID records the OS pid of the process driving this session, so the monitor
 // can tell a live agent from a dead one (deterministic liveness via kill -0).
 func (s *Store) SetPID(ticket string, pid int) error {
@@ -186,7 +197,7 @@ func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 // Get returns one session.
 func (s *Store) Get(ticket string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch
 		 FROM sessions WHERE ticket=?`, ticket)
 	return scan(row)
 }
@@ -194,7 +205,7 @@ func (s *Store) Get(ticket string) (*Session, error) {
 // List returns all sessions, most recently updated first.
 func (s *Store) List() ([]Session, error) {
 	rows, err := s.db.Query(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -294,7 +305,8 @@ func scan(r scanner) (*Session, error) {
 	var s Session
 	var created, updated int64
 	if err := r.Scan(&s.Ticket, &s.Repo, &s.State, &s.Retries, &s.Branch,
-		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &s.SourcePath, &created, &updated); err != nil {
+		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &s.SourcePath,
+		&created, &updated, &s.BaseBranch); err != nil {
 		return nil, err
 	}
 	s.CreatedAt = time.Unix(created, 0)

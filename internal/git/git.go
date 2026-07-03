@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -43,10 +44,68 @@ func DefaultBranch(repo string) string {
 	return "main"
 }
 
+// Branch is one repository branch (local or remote).
+type Branch struct {
+	Name   string // bare name without "origin/" prefix
+	Remote bool   // true if only on origin, false if local (or both)
+}
+
+// Branches lists local and remote branches sorted by most-recently-committed,
+// deduplicating so a branch that is both local and remote appears once (preferring
+// the local entry so in-progress parent branches are reachable). No network call.
+func Branches(repo string) ([]Branch, error) {
+	out, err := run(repo, "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname:short)", "refs/heads", "refs/remotes/origin")
+	if err != nil {
+		return nil, err
+	}
+	type entry struct {
+		name   string
+		remote bool
+		order  int
+	}
+	byName := map[string]*entry{}
+	order := 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "origin/HEAD" {
+			continue
+		}
+		remote := strings.HasPrefix(line, "origin/")
+		name := strings.TrimPrefix(line, "origin/")
+		if e, ok := byName[name]; ok {
+			if !remote && e.remote {
+				e.remote = false // upgrade to local
+			}
+		} else {
+			byName[name] = &entry{name: name, remote: remote, order: order}
+			order++
+		}
+	}
+	entries := make([]*entry, 0, len(byName))
+	for _, e := range byName {
+		entries = append(entries, e)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })
+	branches := make([]Branch, len(entries))
+	for i, e := range entries {
+		branches[i] = Branch{Name: e.name, Remote: e.remote}
+	}
+	return branches, nil
+}
+
+// RefExists reports whether ref resolves to a valid object in repo.
+func RefExists(repo, ref string) bool {
+	_, err := run(repo, "rev-parse", "--verify", "--quiet", ref)
+	return err == nil
+}
+
 // CreateWorktree fetches origin and adds a fresh worktree on a new branch off
-// origin/<base>. A stale worktree at the same path is removed first.
-// The call is serialized per repo to avoid concurrent writes to .git/config.
-func CreateWorktree(repo, worktreeDir, branch, base string) error {
+// baseRef (used verbatim as the git starting point). A stale worktree at the
+// same path is removed first. When baseRef is empty it defaults to
+// origin/<default branch>. The call is serialized per repo to avoid concurrent
+// writes to .git/config.
+func CreateWorktree(repo, worktreeDir, branch, baseRef string) error {
 	mu := repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
@@ -54,8 +113,8 @@ func CreateWorktree(repo, worktreeDir, branch, base string) error {
 	if _, err := run(repo, "fetch", "origin", "--prune"); err != nil {
 		return err
 	}
-	if base == "" {
-		base = DefaultBranch(repo)
+	if baseRef == "" {
+		baseRef = "origin/" + DefaultBranch(repo)
 	}
 	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0o755); err != nil {
 		return err
@@ -68,9 +127,9 @@ func CreateWorktree(repo, worktreeDir, branch, base string) error {
 	if err := os.RemoveAll(worktreeDir); err != nil {
 		return fmt.Errorf("clear stale worktree dir: %w", err)
 	}
-	// -B creates the branch, or RESETS it to origin/<base> if it already exists,
+	// -B creates the branch, or RESETS it to baseRef if it already exists,
 	// so a re-run starts clean whether or not the branch lingers from a prior run.
-	if _, err := run(repo, "worktree", "add", "-B", branch, worktreeDir, "origin/"+base); err != nil {
+	if _, err := run(repo, "worktree", "add", "-B", branch, worktreeDir, baseRef); err != nil {
 		return err
 	}
 	excludeAgentDir(worktreeDir)

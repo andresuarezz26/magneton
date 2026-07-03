@@ -35,6 +35,7 @@ type Task struct {
 	Ship        bool         // ship without verifying: trust the human's fix, commit + push + PR directly
 	Store       *store.Store // optional; enables emulator coordination
 	Images      []string     // image files to make the agent see (pasted-content flow)
+	Base        string       // bare base branch name for stacked diffs; "" = default
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
@@ -87,8 +88,39 @@ func Run(t Task, h Hooks) Outcome {
 
 	// 1. Provision an isolated worktree (Decision 7).
 	setState(store.StatePlanning, 0)
-	logf("[%s] worktree %s on %s", t.Ticket, worktree, branch)
-	if err := git.CreateWorktree(repo.Path, worktree, branch, repo.Base); err != nil {
+	// Resolve the stacked base: the flag wins, but on a plain re-run (no --base)
+	// fall back to the value persisted at creation time so re-running a stacked
+	// ticket doesn't silently reset it to origin/<default> and drop the parent's
+	// commits. (finishShip reads the same stored value for the PR base.)
+	stackBase := t.Base
+	if stackBase == "" && t.Store != nil {
+		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
+			stackBase = sess.BaseBranch
+		}
+	}
+	// Resolve the base ref: prefer a local branch (covers in-progress parents),
+	// then fall back to origin/<name>, then origin/<default>. Validate before
+	// creating the worktree so a bad base surfaces a clear error rather than a
+	// raw git message.
+	baseRef := "origin/" + func() string {
+		if repo.Base != "" {
+			return repo.Base
+		}
+		return git.DefaultBranch(repo.Path)
+	}()
+	if stackBase != "" {
+		if git.RefExists(repo.Path, stackBase) {
+			baseRef = stackBase // local branch (e.g. in-progress parent)
+		} else if git.RefExists(repo.Path, "origin/"+stackBase) {
+			baseRef = "origin/" + stackBase
+		} else {
+			setState(store.StateNeedsYou, 0)
+			return Outcome{State: store.StateNeedsYou,
+				Err: fmt.Errorf("stack base %q: no local or remote branch found", stackBase)}
+		}
+	}
+	logf("[%s] worktree %s on %s (base: %s)", t.Ticket, worktree, branch, baseRef)
+	if err := git.CreateWorktree(repo.Path, worktree, branch, baseRef); err != nil {
 		setState(store.StateFailed, 0)
 		return Outcome{State: store.StateFailed, Err: fmt.Errorf("create worktree: %w", err)}
 	}
@@ -322,7 +354,18 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 		return Outcome{State: store.StateReview}
 	}
 
-	base := repo.Base
+	// PR base: use the stacked base if set, else load from the store (covers
+	// resume/ship where t.Base is "" but the base was recorded at worktree time),
+	// else fall back to the repo default.
+	base := t.Base
+	if base == "" && t.Store != nil {
+		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
+			base = sess.BaseBranch
+		}
+	}
+	if base == "" {
+		base = repo.Base
+	}
 	if base == "" {
 		base = git.DefaultBranch(repo.Path)
 	}
