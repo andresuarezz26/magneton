@@ -31,3 +31,22 @@ go build -o agent .
 - Keep packages small and dependency-light; shell out to `git`/`gh`/`claude` rather than wrapping SDKs.
 - The agent edits code **and verifies it** — it discovers + runs the project's own build/tests (handling per-project setups and company build skills) and self-certifies via `report.json` `verified`. The **orchestrator** owns commit, push, and PR, and trusts that verdict (it no longer runs Gradle itself).
 - Never auto-merge — stop at `review`.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
