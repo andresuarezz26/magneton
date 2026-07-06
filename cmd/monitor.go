@@ -727,25 +727,39 @@ func (m monitorModel) renderDashboardBody(w int) string {
 			b.WriteString(dimStyle.Render("  stacked on: "+sel.BaseBranch) + "\n")
 		}
 		for _, ln := range whyLines(*sel) {
-			b.WriteString(whyStyle.Render(truncate(ln, w)) + "\n")
+			for _, seg := range wrapLine(ln, w) {
+				b.WriteString(whyStyle.Render(seg) + "\n")
+			}
 		}
 		if m.answering {
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
 			b.WriteString("  › " + m.input + "▌")
 		} else {
-			detailH := m.height - listLines - 10 - len(whyLines(*sel))
+			whyRowCount := 0
+			for _, ln := range whyLines(*sel) {
+				whyRowCount += len(wrapLine(ln, w))
+			}
+			detailH := m.height - listLines - 10 - whyRowCount
 			if detailH < 3 {
 				detailH = 3
 			}
-			lines := tailLines(paths.LogFor(sel.Ticket), detailH)
-			if len(lines) == 0 {
+			// Fetch more raw lines than detailH: each raw line may wrap into
+			// several rows, so we need a larger pool to fill the box. After
+			// wrapping, trim to exactly detailH rendered rows so the log section
+			// never overflows and pushes the ticket list off screen.
+			rawLines := tailLines(paths.LogFor(sel.Ticket), detailH*6)
+			var segs []string
+			for _, ln := range rawLines {
+				segs = append(segs, wrapLine(stripPrefix(ln, sel.Ticket), w)...)
+			}
+			if len(segs) > detailH {
+				segs = segs[len(segs)-detailH:]
+			}
+			if len(segs) == 0 {
 				b.WriteString("  " + dimStyle.Render("(no log output yet)"))
 			}
-			for i, ln := range lines {
-				b.WriteString(truncate(stripPrefix(ln, sel.Ticket), w))
-				if i < len(lines)-1 {
-					b.WriteString("\n")
-				}
+			for _, seg := range segs {
+				b.WriteString(seg + "\n")
 			}
 		}
 	}
@@ -911,4 +925,32 @@ func truncate(s string, w int) string {
 		r = r[:len(r)-1]
 	}
 	return string(r) + "…"
+}
+
+// wrapLine breaks s into visual segments each at most w columns wide. Used in
+// log views so long lines wrap instead of being cut off with "…".
+func wrapLine(s string, w int) []string {
+	if w <= 0 {
+		return nil
+	}
+	if lipgloss.Width(s) <= w {
+		return []string{s}
+	}
+	var out []string
+	r := []rune(s)
+	for len(r) > 0 {
+		take := w
+		if take > len(r) {
+			take = len(r)
+		}
+		for take > 0 && lipgloss.Width(string(r[:take])) > w {
+			take--
+		}
+		if take == 0 {
+			take = 1
+		}
+		out = append(out, string(r[:take]))
+		r = r[take:]
+	}
+	return out
 }

@@ -142,7 +142,7 @@ func (m monitorModel) runMethods() []runMethod {
 	if m.jira != nil {
 		ms = append(ms, runMethod{"jira", "From Jira", "enter Jira ticket key(s)"})
 	}
-	return append(ms, runMethod{"file", "From .md file", "path to a local .md ticket"})
+	return append(ms, runMethod{"file", "Drag and drop a Markdown file", "drag one or more .md tickets into the terminal"})
 }
 
 func (m monitorModel) updateRunMethod(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -203,7 +203,7 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "jira":
 		return m.updateRunTokens(msg, "jira")
 	case "file":
-		return m.updateRunTokens(msg, "file")
+		return m.updateRunFile(msg)
 	}
 	m.view = viewRunMethod // no mode set → back to the picker
 	return m, nil
@@ -243,6 +243,40 @@ func (m monitorModel) updateRunContent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+// file method: only drag-and-drop is accepted. Typed characters are ignored so
+// a stray paste of ticket text can't create a bad chip. Multiple files dropped
+// at once arrive as one paste event and are all accepted.
+func (m monitorModel) updateRunFile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Paste {
+		for _, tok := range parseDroppedPaths(string(msg.Runes)) {
+			if strings.HasSuffix(strings.ToLower(tok), ".md") {
+				m.runTickets = append(m.runTickets, newFileTicket(tok))
+			}
+		}
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyEnter:
+		return m.launchOrClose()
+	case tea.KeyEsc:
+		return m.cancelRunInput(), nil
+	case tea.KeyBackspace:
+		if n := len(m.runTickets); n > 0 {
+			m.runTickets = m.runTickets[:n-1]
+		}
+	default:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "ctrl+s":
+			if n := len(m.runTickets); n > 0 {
+				return m.openStackPicker(n - 1)
+			}
 		}
 	}
 	return m, nil
@@ -620,11 +654,13 @@ func (m monitorModel) renderRunInput(w int) string {
 		b.WriteString("  › " + m.runText + "▌\n")
 		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
 	case "file":
-		b.WriteString(headerStyle.Render("  From .md file") + "\n")
-		b.WriteString(dimStyle.Render("  type/drag a path to a .md ticket; space adds more") + "\n\n")
+		b.WriteString(headerStyle.Render("  Drag and drop your local Markdown file (.md)") + "\n")
+		b.WriteString(dimStyle.Render("  drag one or more .md files from Finder into the terminal") + "\n\n")
 		chips()
-		b.WriteString("  › " + m.runText + "▌\n")
-		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
+		if len(m.runTickets) == 0 {
+			b.WriteString("  " + dimStyle.Render("waiting for .md files…") + "\n")
+		}
+		b.WriteString("\n  " + dimStyle.Render("drag .md file · backspace remove · ctrl+s stack · enter launch · esc cancel"))
 	default: // content
 		b.WriteString(headerStyle.Render("  Paste ticket content") + "\n")
 		b.WriteString(dimStyle.Render("  paste a ticket; you'll confirm its id and attach images") + "\n\n")
@@ -836,7 +872,9 @@ func (m monitorModel) renderOutput(w int) string {
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("  "+m.outputTitle) + "\n\n")
 	for _, ln := range strings.Split(strings.TrimRight(m.outputText, "\n"), "\n") {
-		b.WriteString(truncate(ln, w) + "\n")
+		for _, seg := range wrapLine(ln, w) {
+			b.WriteString(seg + "\n")
+		}
 	}
 	b.WriteString("\n  " + dimStyle.Render("esc/enter close"))
 	return b.String()
