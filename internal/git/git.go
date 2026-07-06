@@ -130,7 +130,19 @@ func CreateWorktree(repo, worktreeDir, branch, baseRef string) error {
 	// -B creates the branch, or RESETS it to baseRef if it already exists,
 	// so a re-run starts clean whether or not the branch lingers from a prior run.
 	if _, err := run(repo, "worktree", "add", "-B", branch, worktreeDir, baseRef); err != nil {
-		return err
+		// The branch may be checked out in a stale worktree at a different path
+		// (e.g. the repo was moved, or the worktree naming changed between runs).
+		// Parse that path from the error and remove it, then retry once.
+		if stale := parseStaleWorktreePath(err.Error()); stale != "" {
+			_, _ = run(repo, "worktree", "remove", "--force", stale)
+			_ = os.RemoveAll(stale)
+			_, _ = run(repo, "worktree", "prune")
+			if _, retryErr := run(repo, "worktree", "add", "-B", branch, worktreeDir, baseRef); retryErr != nil {
+				return retryErr
+			}
+		} else {
+			return err
+		}
 	}
 	excludeAgentDir(worktreeDir)
 	return nil
@@ -174,6 +186,22 @@ func UntrackAgentDir(worktreeDir string) {
 func RemoveWorktree(repo, worktreeDir string) error {
 	_, err := run(repo, "worktree", "remove", "--force", worktreeDir)
 	return err
+}
+
+// parseStaleWorktreePath extracts the path from a git error of the form:
+//
+//	fatal: 'branch' is already used by worktree at '/some/path'
+func parseStaleWorktreePath(msg string) string {
+	const marker = "is already used by worktree at '"
+	i := strings.Index(msg, marker)
+	if i == -1 {
+		return ""
+	}
+	rest := msg[i+len(marker):]
+	if j := strings.Index(rest, "'"); j != -1 {
+		return rest[:j]
+	}
+	return ""
 }
 
 // HasChanges reports whether the worktree has uncommitted changes.
