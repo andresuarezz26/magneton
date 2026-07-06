@@ -1,155 +1,84 @@
 <img width="1100" height="679" alt="magneton" src="https://github.com/user-attachments/assets/f27ac84a-4fba-44f8-bd2f-891d474a6a9d" />
 
-
 # Magneton
 
-**An autonomous Android development pipeline. Drop in a Jira ticket. Get back a pull request.**
-
-Magneton runs the full engineering cycle on its own: reads your ticket, writes a plan, implements the change, compiles the project, runs the tests (including instrumented tests on an emulator when needed), and opens a pull request — all without you watching. You come back to review code, not manage agents.
-
-Run one ticket or a dozen at once. Each gets its own git worktree and runs in parallel. A shared emulator semaphore makes sure no two agents fight over the same device. When a ticket is clean, you get a PR. When one gets stuck, it flags you and waits.
-
-This is not an AI assistant you drive. It is a pipeline that turns your backlog into reviewed, mergeable pull requests.
-
----
-
-## What it does
-
-Each ticket moves through three stages autonomously:
-
-- **Plan** — reads your codebase, writes a focused implementation plan, identifies any blocking questions, and decides upfront whether the ticket requires instrumented tests (Compose, Espresso, `androidTest/`) or unit tests only.
-- **Implement** — follows the approved plan and makes the minimal change it describes.
-- **Verify** — discovers how your project builds, compiles it with Gradle, and runs the appropriate tests. If the plan flagged a device dependency, it boots the emulator and runs instrumented tests too. The ticket is marked green only after the build and tests pass.
-
-When a ticket passes verification, the agent opens a pull request. When it hits something it cannot resolve — a compile error beyond its reach, an ambiguous requirement — it flips to **NEEDS YOU** in the TUI. You answer the question or open the worktree in Android Studio, then let it continue.
-
----
-
-## Why this exists
-
-At my company, management started measuring developer productivity by pull requests merged and lines of code added. Flawed metrics, but the ones I'm judged on. I started running Claude Code in parallel with git worktrees, but I was babysitting every agent — constant context switching across terminals, manually creating branches, driving plan mode one session at a time, coordinating the emulator by hand, writing PR descriptions.
-
-The code was never the bottleneck. The toil around it was. So I built Magneton to own that toil: one dashboard for all tickets, automatic worktree and branch management, staged plan → implement → verify execution, emulator scheduling, and PR creation. My PR count roughly doubled. The only thing I still do is review the output.
-
----
-
-## How it compares
-
-**[Firebender](https://firebender.com/)** is an Android Studio plugin — a context-aware assistant that lives inside your IDE. You prompt it, review its suggestions, and guide it. Great tool; different category. Magneton runs unattended from a ticket description and hands you a PR.
-
-**[OpenHands](https://www.openhands.dev/) / [Devin](https://devin.ai/)** are cloud-based autonomous agents that work across any codebase. They have no awareness of Gradle build systems, Android emulator lifecycle, instrumented vs. unit test routing, or Compose-specific verification. Magneton is built around those constraints specifically.
-
-**tmux + Claude Code** works, but you manage state yourself — no single view of what every agent is doing, no automatic worktree setup, no emulator coordination, no PR automation.
-
-Magneton's edge is specificity: it knows what Android projects look like, how they build, and what it means to actually verify an Android change.
-
----
-
-## Quick start
-
-**Prerequisites:**
-- [Claude Code](https://claude.ai/download) — authenticated and in your PATH (`claude --version` works)
-- [Android Studio](https://developer.android.com/studio) — for your Android project and AVD management
-- `git` and `gh` (GitHub CLI, authenticated)
-
-### Install
+> **Coding agents that don't need supervision. Drop in a ticket. Review the PR.**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andresuarezz26/magneton/main/install.sh | bash
 ```
 
-Downloads the right pre-built binary for your platform (macOS arm64/x86, Linux), installs to `~/.local/bin/magneton`, and checks your prerequisites. No Go required.
+Magneton is an autonomous ticket → PR pipeline for Android. Each ticket runs plan → implement → verify in its own git worktree, in parallel, and opens a pull request only after the agent has actually seen the build and tests pass. If verification fails, the agent fixes and re-runs until it's green - or hands the ticket back to you. You don't prompt the agent - you review its PR like a colleague's.
 
-Then configure your repo:
+**Requires:** [Claude Code](https://claude.ai/download) (authenticated), `git` + `gh`, [Android Studio](https://developer.android.com/studio).
 
-```bash
-magneton init
+## The pipeline
+
+```mermaid
+flowchart LR
+    A[Ticket] --> B[Plan<br/>read-only]
+    B --> C{Blocking<br/>questions?}
+    C -->|yes| H[NEEDS YOU<br/>answer in TUI]
+    C -->|no| D[Implement<br/>+ self-review]
+    D --> E[Verify<br/>build + tests]
+    E -->|red| D2[Fix + re-run<br/>until green]
+    D2 --> E
+    E -->|green| F[Pull Request]
+    E -->|stuck| H
+    H --> D
 ```
 
-**Want to build from source?** Clone the repo, run `./setup` (requires Go 1.24+), then `magneton init`.
+| Stage | What it does |
+|-------|--------------|
+| **Plan** | Reads the codebase read-only, writes a focused plan, flags blocking questions, decides if the ticket needs an emulator (Compose/Espresso) or unit tests only |
+| **Implement** | Makes the minimal change the plan describes, then adversarially reviews its own diff |
+| **Verify** | Discovers how *your* project builds, runs the real build + tests (boots the emulator if needed), certifies green only after seeing them pass |
 
----
+When an agent gets stuck - ambiguous ticket, compile error it can't fix - the ticket flips to **NEEDS YOU**. Answer in the TUI, resume the Claude session, or open the worktree in Android Studio.
 
-## Running tickets
+## Why Android-native matters
 
-Type `magneton` to open the TUI dashboard. Select **Start new ticket(s)** and pick how to add the ticket:
+General ticket→PR agents (Devin, OpenHands, Copilot Workspace) don't know what verifying an Android change means. Magneton does:
 
-- **Paste ticket content** — copy from Jira, Linear, a doc, anywhere. Magneton extracts the ticket ID for branch naming and asks you to confirm it. You can drag screenshots into the terminal to attach them; the agent sees them during planning.
-- **From Jira** — enter the ticket key and Magneton fetches the title and description directly.
-- **From a .md file** — point at a local markdown file.
+- **Emulator as a shared resource** - a SQLite-backed semaphore lets parallel agents take turns on one AVD; no two agents fight over a device
+- **Instrumented vs. unit test routing** - decided at plan time, enforced at verify time
+- **Gradle-aware verification** - the agent discovers your project's own build setup, including company build scripts
+- **Worktree → Android Studio handoff** - one keystroke opens any agent's worktree in the IDE
+- **Screenshot tickets** - drag images into the terminal; the agent sees them while planning
 
-Queue several tickets at once; they stack as chips in the input, then press Enter to launch them all. The dashboard shows live status and logs for every ticket. When one finishes, its PR link appears. When one needs you, it flags itself and waits.
+## Why I built it
 
----
+My company measures productivity by PRs merged. I ran Claude Code agents in parallel with git worktrees to keep up, and ended up supervising every one of them - terminals, branches, plan mode, the emulator, PR descriptions. Magneton automates that toil. My PR count roughly doubled; now I mostly just review.
 
-## How it works under the hood
+## Usage
 
-Magneton is a Go program that drives a deterministic pipeline. Each ticket runs in its own goroutine with an isolated git worktree, shelling out to Claude Code at each stage. State lives in a local SQLite database. The TUI polls it every second.
+```bash
+magneton                          # TUI dashboard: queue tickets, watch live status
+magneton init                     # configure repo, build commands, optional Jira
 
-The emulator is a shared resource: a SQLite-backed semaphore lets only one agent hold it at a time while others queue. No two agents fight over the same device.
+magneton run PROJ-123             # one Jira ticket → PR
+magneton run a.md b.md c.md       # local markdown tickets, in parallel
 
-Model routing is configurable per stage — you can run a faster model for planning and a more capable one for implementation.
+magneton run PROJ-123 --dry-run   # skip push + PR (try this first)
+magneton run PROJ-123 --resume    # re-verify a worktree you fixed by hand
+magneton run PROJ-124 --base ai/proj-123  # stack on another ticket's branch
 
----
+magneton doctor                   # check Jira, git, claude, gh connectivity
+```
+
+In the TUI, add tickets three ways: **paste** the ticket text (from Jira, Linear, anywhere - screenshots attach by drag), enter a **Jira key**, or point at a **.md file**. Queue several, press enter, watch the dashboard.
+
+Config lives at `~/.agent/config.toml` - repo path, per-stage models, branch naming, [Jira credentials](docs/jira.md) (optional; token stored in your OS keychain).
 
 ## Cost
 
-Magneton uses your existing Claude Code subscription or API key. No separate account, no markup. Each ticket consumes tokens like a full Claude Code working session on that task. Running five tickets in parallel is roughly five concurrent sessions worth of usage. Start with one ticket to calibrate cost before scaling up.
+Runs on your existing Claude Code subscription or API key - no separate account, no markup. Each ticket is a full working session's worth of tokens; five parallel tickets ≈ five concurrent sessions. Start with one.
 
----
+## Caveats
 
-## CLI reference
-
-```bash
-magneton                          # open the TUI dashboard
-
-magneton run PROJ-123             # fetch Jira ticket → plan → implement → verify → PR
-magneton run PROJ-123 PROJ-124    # run two tickets in parallel
-magneton run ./ticket.md          # run from a local markdown file
-
-magneton run PROJ-123 --dry-run          # skip push and PR (safe for first runs)
-magneton run PROJ-123 --resume           # re-gate a worktree you fixed by hand, then PR
-magneton run PROJ-123 --ship             # skip verification: commit + push + PR from your manual fix
-magneton run PROJ-124 --base ai/proj-123 # stack on another branch; PR targets it
-
-magneton doctor                   # connectivity check: Jira, git, claude, gh
-magneton logs PROJ-123            # print the session log
-magneton status                   # table of all sessions
-magneton start                    # start the background daemon
-magneton stop                     # stop the daemon
-```
-
----
-
-## Configuration
-
-Select **Edit config** in the TUI, or edit `~/.agent/config.toml` directly. You can configure the model used at each stage, your repo path, branch naming conventions, and Jira credentials.
-
-<img width="1015" height="400" alt="Screenshot 2026-06-26 at 8 26 30 PM" src="https://github.com/user-attachments/assets/a4b0261a-eb2e-4001-a231-1e047dfaeeb8" />
-
-Run `magneton doctor` after any config change to verify connectivity.
-
----
-
-## Jira setup (optional)
-
-Magneton can pull a ticket's title and description straight from Jira so you can run by key (`magneton run PROJ-123`) instead of writing a markdown file.
-
-1. **Create an API token** at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
-
-2. **Enter it during `magneton init`:**
-
-   | Prompt | Example |
-   | --- | --- |
-   | Jira base URL | `https://your-org.atlassian.net` |
-   | Jira email | `you@your-org.com` |
-   | Jira API token | `ATATT3xFfGF0...` |
-
-   The token is stored in your OS keychain, not the config file. For CI use, set `MAGNETON_JIRA_TOKEN` instead.
-
-3. **Verify** with `magneton doctor`.
-
----
+- **You still review.** Autonomous loops make autonomous mistakes; the PR gate is where your judgment goes.
+- Never auto-merges - every ticket stops at review.
+- Well-defined tickets sail through; vague ones come back as questions.
 
 ## License
 
