@@ -4,15 +4,19 @@
 
 > **A CLI to run your Android development loop, instead of prompting Claude Code by hand.**
 
-Install with one command (macOS/Linux), then run `magneton init`:
+You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, and only becomes a pull request after the agent has actually seen the build and tests pass. If verification fails, it fixes and re-runs until green, or hands the ticket back to you. You stay the reviewer, not the operator.
+
+Run many loops in parallel, follow all of them from one control panel, and get pinged when an agent is blocked.
+
+## Install
+
+One command on macOS or Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andresuarezz26/magneton/main/install.sh | bash
 ```
 
-You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, and only becomes a pull request after the agent has actually seen the build and tests pass. If verification fails, it fixes and re-runs until green, or hands the ticket back to you. You stay the reviewer, not the operator.
-
-Run many loops in parallel, follow all of them from one control panel, and get pinged when an agent is blocked.
+Then run `magneton init` to configure your repo.
 
 **Requires:** [Claude Code](https://claude.ai/download) (authenticated), `git` + `gh`, [Android Studio](https://developer.android.com/studio).
 
