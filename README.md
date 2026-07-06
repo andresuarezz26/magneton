@@ -16,20 +16,16 @@ Run many loops in parallel, follow all of them from one control panel, and get p
 
 **Requires:** [Claude Code](https://claude.ai/download) (authenticated), `git` + `gh`, [Android Studio](https://developer.android.com/studio).
 
-## The pipeline
+## The loop
 
 ```mermaid
-flowchart LR
-    A[Ticket] --> B[Plan<br/>read-only]
-    B --> C{Blocking<br/>questions?}
-    C -->|yes| H[NEEDS YOU<br/>answer in TUI]
-    C -->|no| D[Implement<br/>+ self-review]
-    D --> E[Verify<br/>build + tests]
-    E -->|red| D2[Fix + re-run<br/>until green]
-    D2 --> E
-    E -->|green| F[Pull Request]
-    E -->|stuck| H
-    H --> D
+flowchart TD
+    A[Ticket] --> B[Plan]
+    B --> C[Implement]
+    C --> D[Verify]
+    D -->|pass| E[Pull Request]
+    D -->|fail| C
+    D -->|blocked| F[NEEDS YOU]
 ```
 
 | Stage | What it does |
