@@ -146,7 +146,7 @@ func newGroups() []*group {
 		{label: "RUNNING", style: cyan, match: func(s store.Session) bool {
 			return isRunningState(s.State) && !isStopped(s)
 		}},
-		{label: "DONE", style: green, match: func(s store.Session) bool {
+		{label: "UNDER REVIEW", style: green, match: func(s store.Session) bool {
 			return s.State == "review" || s.State == "merged" || s.State == "closed"
 		}},
 	}
@@ -175,6 +175,9 @@ func glyphFor(s store.Session) string {
 func stateLabel(s store.Session) string {
 	if isStopped(s) {
 		return "stopped"
+	}
+	if s.State == store.StateReview {
+		return "under review"
 	}
 	return s.State
 }
@@ -827,6 +830,16 @@ func whyLines(s store.Session) []string {
 			"⚑ Needs you - the agent got stuck (see log below).",
 			"  Open Android Studio (o) to fix, then press R to gate & open the PR.",
 		}
+	case store.StateReview:
+		line := "◎ Under review - PR is open and waiting for your approval."
+		if s.PRURL != "" {
+			line = "◎ Under review - " + s.PRURL
+		}
+		actions := "  Open Android Studio (o) · open in Claude Code (c)"
+		if !worktreeExists(s.Repo, s.Ticket) {
+			actions = "  Worktree removed - press enter to run again fresh."
+		}
+		return []string{line, actions}
 	}
 	return nil
 }

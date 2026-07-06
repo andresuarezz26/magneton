@@ -56,8 +56,8 @@ func agentActions(s store.Session) []paletteItem {
 		if !active {
 			items = append(items, paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"})
 		}
-	} else if stuck {
-		// Worktree is gone (stopped/cleaned, or it never built) - only a fresh run is possible.
+	} else if stuck || done {
+		// Worktree is gone — only a fresh run is possible.
 		items = append(items, paletteItem{"rerun", "Run again (fresh)", "no worktree left - start this ticket from scratch"})
 	}
 	// Stop is available for live/stuck rows (kills the process, removes the
