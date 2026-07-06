@@ -4,6 +4,8 @@
 
 > **Coding agents that don't need supervision. Drop in a ticket. Review the PR.**
 
+Install with one command (macOS/Linux), then run `magneton init`:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andresuarezz26/magneton/main/install.sh | bash
 ```
