@@ -16,6 +16,11 @@ builds:
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X github.com/andresuarezz26/magneton/cmd.version={{.Version}}
+    hooks:
+      post:
+        # Ad-hoc codesign macOS binaries so Gatekeeper doesn't kill them on
+        # Sonoma/Sequoia. The `file` check skips Linux ELF artifacts.
+        - cmd: sh -c 'file "$1" | grep -q Mach-O && codesign --sign - --force "$1" || true' -- "{{ .Path }}"
 
 archives:
   - id: dist
