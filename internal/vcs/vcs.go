@@ -82,7 +82,7 @@ const defaultPlanComment = `{{- if .Questions}}
 
 *Steps:*
 {{range .Steps}}- {{.}}
-{{end}}No blockers — proceeding with implementation automatically.
+{{end}}No blockers - proceeding with implementation automatically.
 {{- end}}`
 
 func render(name, def string, data any) (string, error) {

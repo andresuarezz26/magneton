@@ -66,13 +66,13 @@ MISSING=0
 
 if ! command -v claude &>/dev/null; then
   echo "⚠  Claude Code not found."
-  echo "   Install it at https://claude.ai/download — required to run Magneton."
+  echo "   Install it at https://claude.ai/download - required to run Magneton."
   MISSING=1
 fi
 
 if ! command -v gh &>/dev/null; then
   echo "⚠  GitHub CLI (gh) not found."
-  echo "   Install it at https://cli.github.com — required to open pull requests."
+  echo "   Install it at https://cli.github.com - required to open pull requests."
   MISSING=1
 elif ! gh auth status &>/dev/null 2>&1; then
   echo "⚠  gh is installed but not authenticated."

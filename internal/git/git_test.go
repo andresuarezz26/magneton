@@ -133,7 +133,7 @@ func fileExists(p string) bool {
 }
 
 // CreateWorktree must exclude magneton's .agent/ scratch dir so it never lands
-// in a commit — even though the agent writes report.json there and the
+// in a commit - even though the agent writes report.json there and the
 // orchestrator commits with `git add -A`.
 func TestWorktreeExcludesAgentDir(t *testing.T) {
 	repo := setupRepo(t)

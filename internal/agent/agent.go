@@ -26,7 +26,7 @@ type Report struct {
 	PRBody string `json:"prBody,omitempty"`
 	// Verified is the agent's self-certification from the verify stage: true once
 	// it has itself run this project's build + tests and seen them pass. nil/false
-	// means unverified — the orchestrator stops at needs-you instead of opening a
+	// means unverified - the orchestrator stops at needs-you instead of opening a
 	// PR. magneton trusts this flag rather than running its own Gradle commands, so
 	// per-project build setups and company-managed build skills all work.
 	Verified *bool `json:"verified,omitempty"`
@@ -36,7 +36,7 @@ type Report struct {
 }
 
 // Plan is the .agent/plan.json the plan stage must write before implementation.
-// It no longer records build/test commands — the verify stage discovers and runs
+// It no longer records build/test commands - the verify stage discovers and runs
 // verification itself. NeedsEmulator is kept so the orchestrator can coordinate
 // the shared emulator across concurrent tickets before the verify stage runs.
 type Plan struct {
@@ -124,7 +124,7 @@ func Run(prompt string, o Options) (sessionID string, err error) {
 	// agent can launch background processes during verify (e.g. `./gradlew … &`,
 	// and Gradle in turn forks a long-lived daemon) that inherit claude's stdout
 	// fd. When that happens the pipe never reaches EOF even after claude exits,
-	// so reading to EOF *before* Wait() would hang forever — which left tickets
+	// so reading to EOF *before* Wait() would hang forever - which left tickets
 	// stuck in the build/running state after the agent had already finished.
 	// cmd.Wait() returns when the claude process itself exits (it only reaps the
 	// direct child, not the reparented daemon) and closes the read pipe, which
@@ -291,7 +291,7 @@ func BuildPlanPrompt(ticketKey, summary, description string) string {
 	}
 	return fmt.Sprintf(`You are a senior Android engineer planning the implementation of a Jira ticket.
 Your job is to READ and UNDERSTAND the codebase, then produce a concrete plan.
-Do NOT edit any source files — this is a planning step only.
+Do NOT edit any source files - this is a planning step only.
 
 TICKET %s: %s
 
@@ -301,7 +301,7 @@ Instructions:
 1. Explore the codebase (git log, find, grep, cat) to understand the affected code.
 2. Identify the minimal, focused change needed to resolve this ticket.
 3. List any genuine ambiguities that would block safe implementation (questions[]).
-   Only list a question if you truly cannot make a safe assumption — prefer a reasonable default.
+   Only list a question if you truly cannot make a safe assumption - prefer a reasonable default.
 4. Classify the ticket type: "bug", "feature", or "chore".
 5. Rate your confidence: "high" (clear path), "medium" (some uncertainty), "low" (significant unknowns).
 6. Decide whether this task requires a connected Android device or emulator.
@@ -345,9 +345,9 @@ IMPLEMENTATION STEPS:
 
 Rules:
 - Follow the approved plan and steps above. Make the focused, minimal change described.
-- This is an Android/Gradle project. A later verification step will build the project and run its tests — write code that compiles and passes.
-- Do NOT git push and do NOT open a pull request — the orchestrator handles commit, push, and PR.
-- PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change — keep its headings and checklist, replace placeholders with real content, and tick the boxes that genuinely apply — and put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
+- This is an Android/Gradle project. A later verification step will build the project and run its tests - write code that compiles and passes.
+- Do NOT git push and do NOT open a pull request - the orchestrator handles commit, push, and PR.
+- PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change - keep its headings and checklist, replace placeholders with real content, and tick the boxes that genuinely apply - and put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
 - Your FINAL action MUST be to write .agent/report.json (create the .agent directory if needed):
 {
   "status": "ready_for_build" | "needs_human",
@@ -374,7 +374,7 @@ Instructions:
    - Scope: did the agent change more than the plan described?
    - Android conventions: proper Kotlin idioms, no deprecated APIs, correct threading?
    - Safety: nullability issues, resource leaks, or crash risks?
-3. Be an adversarial reviewer — only pass if the change is genuinely good.
+3. Be an adversarial reviewer - only pass if the change is genuinely good.
 
 Your ONLY write action is to create .agent/review.json:
 {
@@ -397,33 +397,33 @@ Issues to fix:
 
 // BuildVerifyPrompt has the session discover and RUN this project's own build +
 // test verification, then record the verdict in report.json. The agent
-// self-certifies — magneton trusts report.verified rather than running hardcoded
+// self-certifies - magneton trusts report.verified rather than running hardcoded
 // Gradle commands, so per-project build setups and company-managed build skills
 // all work, and the agent's process uses the real environment (no isolated-Gradle
 // TLS/cert problems). The agent discovers the build/test commands itself. When
 // allowFix is false it only confirms a human's existing fix and must not edit
 // code (the resume path). emulator tells it whether instrumented tests can run.
 func BuildVerifyPrompt(ticketKey, summary string, emulator, allowFix bool) string {
-	device := "No emulator/device is attached — run UNIT tests only; do NOT run instrumented/connected androidTest tasks."
+	device := "No emulator/device is attached - run UNIT tests only; do NOT run instrumented/connected androidTest tasks."
 	if emulator {
-		device = "An Android emulator is booted and attached via adb — also run the instrumented/connected tests."
+		device = "An Android emulator is booted and attached via adb - also run the instrumented/connected tests."
 	}
 	fixRule := `4. If the build or any test fails, FIX the code and re-run until everything passes. Set "verified": true ONLY after you have actually seen the build AND tests pass.`
 	if !allowFix {
-		fixRule = `4. Do NOT modify any source files — a human has already made the fix and you are only confirming it. Run the build + tests and report the result honestly.`
+		fixRule = `4. Do NOT modify any source files - a human has already made the fix and you are only confirming it. Run the build + tests and report the result honestly.`
 	}
 	return fmt.Sprintf(`You are verifying that the change for ticket %s (%s) actually builds and passes its tests, inside an isolated git worktree (your current working directory).
 
-magneton does NOT run the build for you — YOU discover and run it. Android/Gradle setups differ per project and some teams ship their own build/test scripts or skills, so figure out the right way to verify THIS repo:
-1. Discover how this project builds and tests: inspect build.gradle(.kts), gradle.properties, settings.gradle, a Makefile, scripts/, README/CONTRIBUTING, CI config under .github/, and any company-provided build skill. No build/test commands are pre-configured — find them yourself.
+magneton does NOT run the build for you - YOU discover and run it. Android/Gradle setups differ per project and some teams ship their own build/test scripts or skills, so figure out the right way to verify THIS repo:
+1. Discover how this project builds and tests: inspect build.gradle(.kts), gradle.properties, settings.gradle, a Makefile, scripts/, README/CONTRIBUTING, CI config under .github/, and any company-provided build skill. No build/test commands are pre-configured - find them yourself.
 2. Compile the project. %s
-3. Run the tests. Capture the REAL pass/fail result — never assume it passed.
+3. Run the tests. Capture the REAL pass/fail result - never assume it passed.
 %s
-- Do NOT git commit, git push, or open a pull request — the orchestrator owns commit/push/PR.
+- Do NOT git commit, git push, or open a pull request - the orchestrator owns commit/push/PR.
 - Your FINAL action MUST be to update .agent/report.json: read the existing file and rewrite it preserving every existing field, adding/setting:
   "verified": true | false   (true ONLY if the build AND tests actually passed)
   "verifyLog": "<the commands you ran and their outcome; on failure include the failing output tail and why>"
-Setting "verified": false is a normal outcome (not an error) when you cannot get it green — it routes the ticket to a human.`,
+Setting "verified": false is a normal outcome (not an error) when you cannot get it green - it routes the ticket to a human.`,
 		ticketKey, summary, device, fixRule)
 }
 
@@ -441,8 +441,8 @@ TICKET %s: %s
 
 Rules:
 - Make the focused, minimal code change that resolves this ticket. Stay within this worktree.
-- This is an Android/Gradle project. The orchestrator will verify with compile %q and tests %q — write code that will pass them.
-- Do NOT git push and do NOT open a pull request — the orchestrator handles build, commit, push, and PR.
+- This is an Android/Gradle project. The orchestrator will verify with compile %q and tests %q - write code that will pass them.
+- Do NOT git push and do NOT open a pull request - the orchestrator handles build, commit, push, and PR.
 - Your FINAL action MUST be to write .agent/report.json (create the .agent directory if needed) with exactly:
 {
   "status": "ready_for_build" | "needs_human",

@@ -1,16 +1,16 @@
-# Test Plan — local `.md` tickets + parallel `agent run`
+# Test Plan - local `.md` tickets + parallel `agent run`
 
 Validates the `feat/local-parallel-run` work: `agent run file.md`, multiple files in
 parallel, no Jira required, and plan/questions printed to the terminal.
 
 > **Cost note.** Every `.md` (and every Jira key) spawns a **real `claude` session**.
-> Keep test tickets tiny, and run the deterministic/edge tests (A, D) first — they cost
+> Keep test tickets tiny, and run the deterministic/edge tests (A, D) first - they cost
 > nothing. `--dry-run` does edits + build but **never pushes or opens a PR**, so use it
 > for everything until the final real-PR test (G).
 
 ## Prerequisites
 - `claude` authenticated (`claude --version` works). Needed for any test that runs a session (B, C, E, F, G).
-- `gh auth login` done — only needed for the real-PR test (G).
+- `gh auth login` done - only needed for the real-PR test (G).
 - Your Android repo cloned locally with a pushable `origin` (only matters for G).
 - Built binary on this branch:
 
@@ -48,7 +48,7 @@ EOF
 
 ---
 
-## Test A — Edge cases & validation (no cost, no `claude`)
+## Test A - Edge cases & validation (no cost, no `claude`)
 
 These fail/parse **before** any session starts, so they're free and instant.
 
@@ -65,9 +65,9 @@ $AGENT run                      ; echo "exit=$?"      # expect: cobra "requires 
 
 ---
 
-## Test B — One local `.md`, dry-run (first real session)
+## Test B - One local `.md`, dry-run (first real session)
 
-Write a tiny, safe ticket for your repo (pick something trivial — a comment, a constant,
+Write a tiny, safe ticket for your repo (pick something trivial - a comment, a constant,
 a unit test). Example:
 
 ```bash
@@ -97,7 +97,7 @@ cat "$MAGNETON_HOME/logs/TINY-CHANGE.log"                      # full session lo
 
 ---
 
-## Test C — Multiple local `.md` in parallel, dry-run (the headline feature)
+## Test C - Multiple local `.md` in parallel, dry-run (the headline feature)
 
 ```bash
 cat > /tmp/mtickets/a.md <<'EOF'
@@ -128,7 +128,7 @@ $AGENT status                      # two rows
 
 ---
 
-## Test D — Filename → id derivation & collision dedup (cheap, dry-run optional)
+## Test D - Filename → id derivation & collision dedup (cheap, dry-run optional)
 
 ```bash
 mkdir -p /tmp/d1 /tmp/d2
@@ -142,7 +142,7 @@ and `DUP-2` (no clobbering, no store primary-key collision).
 
 ---
 
-## Test E — Plan + questions visible without Jira (minimal CLI validation)
+## Test E - Plan + questions visible without Jira (minimal CLI validation)
 
 Write a deliberately **under-specified** ticket so the agent asks questions:
 
@@ -157,7 +157,7 @@ $AGENT run /tmp/mtickets/vague.md --dry-run
 
 **Pass criteria:**
 - An `----- agent comment -----` block prints the **rendered plan and the questions**
-  to the terminal (and into `$MAGNETON_HOME/logs/VAGUE.log`) — they do **not** silently
+  to the terminal (and into `$MAGNETON_HOME/logs/VAGUE.log`) - they do **not** silently
   vanish.
 - The run stops at `awaiting-answer`.
 - You can answer by editing `vague.md` and re-running (same stop-and-re-run flow as Jira):
@@ -168,7 +168,7 @@ grep -A5 "agent comment" "$MAGNETON_HOME/logs/VAGUE.log"
 
 ---
 
-## Test F — Backward compatibility (only if you use Jira)
+## Test F - Backward compatibility (only if you use Jira)
 
 Confirm the original Jira path is unchanged. Set real `jira_base_url`/`jira_email` in the
 config, export the token, then:
@@ -182,7 +182,7 @@ $AGENT run YOUR-KEY local.md --dry-run # mixed: Jira key + file in one invocatio
 
 ---
 
-## Test G — The real thing: open an actual PR (no dry-run)
+## Test G - The real thing: open an actual PR (no dry-run)
 
 Only after B–C look right. Drop `--dry-run` on one tiny ticket:
 
@@ -216,7 +216,7 @@ git -C /path/to/your/android-repo push origin --delete ai/tiny-change-… 2>/dev
 Parallel **real Gradle** builds share one `~/.agent/.gradle-home` (`internal/paths/paths.go:28`).
 At `concurrency > 1` on a real Android repo you may see Gradle lock contention or cache
 flakiness. If a parallel run fails on a Gradle lock but each ticket passes when run alone,
-that's this issue — not the new code. Mitigation for now: keep `concurrency` low, or run
+that's this issue - not the new code. Mitigation for now: keep `concurrency` low, or run
 heavy tickets one at a time. Fix (follow-up): key `GradleHomeFor` on the ticket id.
 
 ## Quick pass/fail checklist

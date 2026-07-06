@@ -14,7 +14,7 @@ import (
 )
 
 // Repo is one registered Android repository. magneton no longer stores
-// build/test commands here — the agent discovers and runs verification itself
+// build/test commands here - the agent discovers and runs verification itself
 // during the verify stage.
 type Repo struct {
 	Path   string `toml:"path"`
@@ -44,7 +44,7 @@ type Config struct {
 
 // Sandbox controls Claude Code's OS sandbox for magneton's child `claude` runs.
 // The default (Enabled=false) disables the sandbox for magneton's autonomous
-// runs so Gradle gets the network and `~/.gradle` writes it needs — magneton's
+// runs so Gradle gets the network and `~/.gradle` writes it needs - magneton's
 // guardrail is the scoped --allowed-tools allowlist, not the OS sandbox. Set
 // Enabled=true (e.g. on shared/CI machines) to keep the sandbox on; the
 // Gradle-friendly defaults below are then merged with these extra lists.
@@ -130,7 +130,7 @@ func Save(c *Config) error {
 func Load() (*Config, error) {
 	b, err := os.ReadFile(paths.Config())
 	if err != nil {
-		return nil, fmt.Errorf("read config (%s): %w — run `agent init`", paths.Config(), err)
+		return nil, fmt.Errorf("read config (%s): %w - run `agent init`", paths.Config(), err)
 	}
 	var c Config
 	if err := toml.Unmarshal(b, &c); err != nil {
@@ -167,7 +167,7 @@ func (c *Config) applyDefaults() {
 	}
 	if c.AllowedTools == "" {
 		// Scoped allowlist (Decision 16): file edits within the worktree plus the
-		// Gradle wrapper and read-only inspection commands — no arbitrary Bash, so
+		// Gradle wrapper and read-only inspection commands - no arbitrary Bash, so
 		// a misfire can't run destructive or network commands. Teams can widen
 		// this in config if a repo needs more. (Note: read commands like `cat` can
 		// still reach paths outside the worktree; full FS confinement needs a

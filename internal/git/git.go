@@ -137,7 +137,7 @@ func CreateWorktree(repo, worktreeDir, branch, baseRef string) error {
 }
 
 // excludeAgentDir adds magneton's scratch dir (.agent/{plan,report,review}.json)
-// to the worktree's git exclude so `git add -A` never stages it — magneton's
+// to the worktree's git exclude so `git add -A` never stages it - magneton's
 // artifacts must not leak into the target repo's commits/PRs. Best-effort.
 func excludeAgentDir(worktreeDir string) {
 	rel, err := run(worktreeDir, "rev-parse", "--git-path", "info/exclude")
@@ -159,7 +159,7 @@ func excludeAgentDir(worktreeDir string) {
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString("\n# magneton scratch (plan/report/review) — never commit\n.agent/\n")
+	_, _ = f.WriteString("\n# magneton scratch (plan/report/review) - never commit\n.agent/\n")
 }
 
 // UntrackAgentDir removes a previously-committed .agent/ scratch dir from the

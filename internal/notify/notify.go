@@ -15,7 +15,7 @@ import (
 
 // Send fires a native OS notification (best effort) and appends to daemon.log.
 func Send(title, body string) {
-	logLine(fmt.Sprintf("%s — %s", title, body))
+	logLine(fmt.Sprintf("%s - %s", title, body))
 	if runtime.GOOS == "darwin" {
 		script := fmt.Sprintf("display notification %q with title %q", body, title)
 		_ = exec.Command("osascript", "-e", script).Run()

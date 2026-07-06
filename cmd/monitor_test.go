@@ -223,7 +223,7 @@ func TestCancelAgentMarksStopped(t *testing.T) {
 // TestHeaderCounts guards the header's two live tallies. "N running" counts
 // only the RUNNING group (in-progress agents), and "N need you" counts only
 // the NEEDS YOU group. STOPPED and DONE sessions are historical and must
-// inflate neither — the header reflects what's happening now, not all time.
+// inflate neither - the header reflects what's happening now, not all time.
 func TestHeaderCounts(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "state.db"))
@@ -235,10 +235,10 @@ func TestHeaderCounts(t *testing.T) {
 	seed := []struct{ ticket, state string }{
 		{"KAN-1", "needs-you"},        // need you
 		{"KAN-2", "failed"},           // need you
-		{"KAN-3", store.StateStopped}, // stopped — counts toward neither
-		{"KAN-4", store.StateStopped}, // stopped — counts toward neither
-		{"KAN-5", store.StateStopped}, // stopped — counts toward neither
-		{"KAN-6", "review"},           // done — counts toward neither
+		{"KAN-3", store.StateStopped}, // stopped - counts toward neither
+		{"KAN-4", store.StateStopped}, // stopped - counts toward neither
+		{"KAN-5", store.StateStopped}, // stopped - counts toward neither
+		{"KAN-6", "review"},           // done - counts toward neither
 		{"KAN-7", "working"},          // running
 		{"KAN-8", "planning"},         // running
 	}

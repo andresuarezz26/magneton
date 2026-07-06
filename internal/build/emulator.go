@@ -1,5 +1,5 @@
 // Package build manages the Android emulator (AVD boot/wait/kill) used during
-// the verify stage. The compile/test gate itself is no longer run here — the
+// the verify stage. The compile/test gate itself is no longer run here - the
 // agent discovers and runs the project's own build and self-certifies via
 // report.json.
 package build
@@ -92,7 +92,7 @@ func WaitReady(ctx context.Context, p SDKPaths) error {
 }
 
 // Kill sends SIGTERM then SIGKILL to the emulator process. Used on daemon
-// shutdown and idle-timeout — NOT after individual test runs.
+// shutdown and idle-timeout - NOT after individual test runs.
 func Kill(pid int) {
 	proc, err := os.FindProcess(pid)
 	if err != nil {

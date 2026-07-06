@@ -138,7 +138,7 @@ func Run(t Task, h Hooks) Outcome {
 	// images never land in the PR.
 	desc := stageImages(t, worktree, logf)
 
-	// 2. PLAN stage — strong model, read-only tools.
+	// 2. PLAN stage - strong model, read-only tools.
 	modelPlan := t.Cfg.ModelPlan
 	modelImpl := t.Cfg.ModelImpl
 	modelReview := t.Cfg.ModelReview
@@ -160,7 +160,7 @@ func Run(t Task, h Hooks) Outcome {
 	if err != nil {
 		logf("[%s] needs-you: plan stage did not produce plan.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
-		needsYouComment(fmt.Sprintf("The plan stage failed to produce a plan — the ticket may be too ambiguous or the codebase too complex to analyse automatically.\n\nError: `%v`", err))
+		needsYouComment(fmt.Sprintf("The plan stage failed to produce a plan - the ticket may be too ambiguous or the codebase too complex to analyse automatically.\n\nError: `%v`", err))
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
@@ -177,7 +177,7 @@ func Run(t Task, h Hooks) Outcome {
 		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, t.Cfg.AVDName, sdkPaths.ADB)
 	}
 
-	// 3. CLARIFY — always post plan to Jira; stop if there are blocking questions.
+	// 3. CLARIFY - always post plan to Jira; stop if there are blocking questions.
 	if h.Comment != nil {
 		if comment, cerr := vcs.RenderPlanComment(vcs.PlanData{
 			Ticket: t.Ticket, Summary: t.Summary,
@@ -196,7 +196,7 @@ func Run(t Task, h Hooks) Outcome {
 		return Outcome{State: store.StateAwaiting}
 	}
 
-	// 4. IMPLEMENT stage — fast model, full tools, plan injected.
+	// 4. IMPLEMENT stage - fast model, full tools, plan injected.
 	setState(store.StateWorking, 0)
 	logf("[%s] stage:implement model:%s", t.Ticket, modelImpl)
 	implOpts := agent.Options{
@@ -227,18 +227,18 @@ func Run(t Task, h Hooks) Outcome {
 	if err != nil {
 		logf("[%s] needs-you: missing/invalid report.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
-		needsYouComment("The implement stage ended without producing a completion report — the session likely crashed or timed out mid-run.")
+		needsYouComment("The implement stage ended without producing a completion report - the session likely crashed or timed out mid-run.")
 		return Outcome{State: store.StateNeedsYou}
 	}
 	if report.Status == "needs_human" {
-		logf("[%s] needs-you: agent reported needs_human — %s", t.Ticket, report.Summary)
+		logf("[%s] needs-you: agent reported needs_human - %s", t.Ticket, report.Summary)
 		setState(store.StateNeedsYou, 0)
 		needsYouComment(fmt.Sprintf("The agent determined it cannot safely complete this ticket automatically:\n\n> %s", report.Summary))
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] implement done: %s", t.Ticket, report.Summary)
 
-	// 5. SELF-REVIEW — adversarial diff review; one fix round if issues found.
+	// 5. SELF-REVIEW - adversarial diff review; one fix round if issues found.
 	setState(store.StateReviewing, 0)
 	logf("[%s] stage:review model:%s", t.Ticket, modelReview)
 	reviewOpts := agent.Options{
@@ -254,9 +254,9 @@ func Run(t Task, h Hooks) Outcome {
 		logf("[%s] (warn) review stage exited: %v", t.Ticket, err)
 	}
 	if review, err := agent.ReadReview(worktree); err != nil {
-		logf("[%s] (warn) no review.json — skipping self-review gate", t.Ticket)
+		logf("[%s] (warn) no review.json - skipping self-review gate", t.Ticket)
 	} else if review.Verdict == "fix" && len(review.Issues) > 0 {
-		logf("[%s] self-review: %d issue(s) — applying one fix round", t.Ticket, len(review.Issues))
+		logf("[%s] self-review: %d issue(s) - applying one fix round", t.Ticket, len(review.Issues))
 		fixOpts := implOpts
 		fixOpts.ResumeID = sessionID
 		if sid, ferr := agent.Run(agent.BuildReviewFixPrompt(review.Issues), fixOpts); ferr != nil {
@@ -274,7 +274,7 @@ func Run(t Task, h Hooks) Outcome {
 	if needsEmu {
 		logf("[%s] waiting for emulator…", t.Ticket)
 		if err := <-emulatorReady; err != nil {
-			logf("[%s] (warn) emulator unavailable: %v — falling back to unit tests", t.Ticket, err)
+			logf("[%s] (warn) emulator unavailable: %v - falling back to unit tests", t.Ticket, err)
 			needsEmu = false
 		} else {
 			for {
@@ -290,13 +290,13 @@ func Run(t Task, h Hooks) Outcome {
 		}
 	}
 
-	// VERIFY — the agent discovers and runs this project's own build + tests
+	// VERIFY - the agent discovers and runs this project's own build + tests
 	// itself (per-project Gradle setups and company build skills all work), fixes
 	// failures, and certifies the result in report.json. magneton trusts that
 	// verdict instead of running hardcoded Gradle commands. Because the agent's
 	// process inherits the real environment, this also sidesteps the isolated-Gradle
 	// TLS/cert failures the orchestrator-run gate hit on locked-down machines.
-	logf("[%s] stage:verify — agent will discover & run build + tests (emulator=%v)", t.Ticket, needsEmu)
+	logf("[%s] stage:verify - agent will discover & run build + tests (emulator=%v)", t.Ticket, needsEmu)
 	vreport, verified, sid := verifyWithAgent(t, worktree, sessionID, needsEmu, true, anthropicKey, logf, setState)
 	if sid != "" {
 		sessionID = sid
@@ -349,7 +349,7 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	}
 
 	if t.DryRun {
-		logf("[%s] dry-run: branch %s ready — skipping push + PR", t.Ticket, branch)
+		logf("[%s] dry-run: branch %s ready - skipping push + PR", t.Ticket, branch)
 		setState(store.StateReview, attempts-1)
 		return Outcome{State: store.StateReview}
 	}
@@ -414,13 +414,13 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 			h.Comment(c)
 		}
 	}
-	logf("[%s] review — human-gated. magneton stops here.", t.Ticket)
+	logf("[%s] review - human-gated. magneton stops here.", t.Ticket)
 	return Outcome{State: store.StateReview, PRURL: prURL}
 }
 
 // archiveReport persists a ticket's completion report into magneton's own home
 // (~/.agent/reports/<ticket>.json) so it survives outside the worktree and can
-// later be surfaced by a report viewer — without ever being committed to the
+// later be surfaced by a report viewer - without ever being committed to the
 // target repo. Best-effort: a failure here never blocks shipping.
 func archiveReport(ticket string, r *agent.Report, logf func(string, ...interface{})) {
 	if err := os.MkdirAll(paths.Reports(), 0o755); err != nil {
@@ -503,7 +503,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 	if !worktreeReady(worktree) {
 		setState(store.StateFailed, 0)
 		return Outcome{State: store.StateFailed,
-			Err: fmt.Errorf("resume: no worktree at %s — run without --resume to start fresh", worktree)}
+			Err: fmt.Errorf("resume: no worktree at %s - run without --resume to start fresh", worktree)}
 	}
 	if h.OnField != nil {
 		h.OnField(branch, worktree, "")
@@ -524,7 +524,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, ready)
 		logf("[%s] waiting for emulator…", t.Ticket)
 		if err := <-ready; err != nil {
-			logf("[%s] (warn) emulator unavailable: %v — falling back to unit tests", t.Ticket, err)
+			logf("[%s] (warn) emulator unavailable: %v - falling back to unit tests", t.Ticket, err)
 			needsEmu = false
 		} else {
 			for {
@@ -541,7 +541,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 	logf("[%s] verify (resume): agent will run build + tests on your changes (emulator=%v)", t.Ticket, needsEmu)
 
 	// The human already fixed the code; the agent only RUNS the build + tests to
-	// confirm it (allowFix=false — it never edits) and self-certifies in report.json.
+	// confirm it (allowFix=false - it never edits) and self-certifies in report.json.
 	vreport, verified, _ := verifyWithAgent(t, worktree, "", needsEmu, false, anthropicKey, logf, setState)
 	if !verified {
 		reason := "the build/tests are still red on your changes."
@@ -560,7 +560,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 
 // shipOnly trusts the human's fix completely: it SKIPS verification entirely and
 // goes straight to commit + push + PR from the existing worktree. It's the escape
-// hatch for when verification itself is the unreliable part — e.g. sandbox or
+// hatch for when verification itself is the unreliable part - e.g. sandbox or
 // environment constraints in the worktree that fail the build regardless of the
 // code (the Kotlin Native cache .lock case), where re-running the gate would loop
 // in needs-you forever no matter how good the fix is. The human has confirmed it
@@ -585,12 +585,12 @@ func shipOnly(t Task, h Hooks) Outcome {
 	if !worktreeReady(worktree) {
 		setState(store.StateFailed, 0)
 		return Outcome{State: store.StateFailed,
-			Err: fmt.Errorf("ship: no worktree at %s — run without --ship to start fresh", worktree)}
+			Err: fmt.Errorf("ship: no worktree at %s - run without --ship to start fresh", worktree)}
 	}
 	if h.OnField != nil {
 		h.OnField(branch, worktree, "")
 	}
-	logf("[%s] ship: trusting your fix — skipping verification, committing + opening PR", t.Ticket)
+	logf("[%s] ship: trusting your fix - skipping verification, committing + opening PR", t.Ticket)
 
 	// Reuse the last report (for PR body/files) if one survived; finishShip
 	// tolerates a nil report.
@@ -607,7 +607,7 @@ func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(strin
 	setState(store.StateNeedsYou, 0)
 	if h.Comment != nil {
 		h.Comment(fmt.Sprintf(
-			"🤖 *magneton [%s] — still red after resume*\n\nThe build or tests failed on your changes.\n\n*What the agent saw (tail):*\n{code}\n%s\n{code}\n\nFix in the worktree and resume again:\n`open -a \"Android Studio\" %s`",
+			"🤖 *magneton [%s] - still red after resume*\n\nThe build or tests failed on your changes.\n\n*What the agent saw (tail):*\n{code}\n%s\n{code}\n\nFix in the worktree and resume again:\n`open -a \"Android Studio\" %s`",
 			t.Ticket, tail(reason, 1500), worktree))
 	}
 	return Outcome{State: store.StateNeedsYou}
@@ -619,7 +619,7 @@ func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(strin
 func bootOrWait(avdName string, p build.SDKPaths, st *store.Store, logf func(string, ...interface{}), done chan<- error) {
 	// If any emulator is already attached via adb, skip booting entirely.
 	if build.AlreadyRunning(p) {
-		logf("[emulator] already running — reusing")
+		logf("[emulator] already running - reusing")
 		_ = st.ReleaseEmulator(avdName) // ensure state=ready
 		done <- nil
 		return
@@ -646,7 +646,7 @@ func bootOrWait(avdName string, p build.SDKPaths, st *store.Store, logf func(str
 		if !won {
 			// Another runner beat us to the start; kill our orphan.
 			build.Kill(pid)
-			logf("[emulator] start race lost — waiting for peer's boot")
+			logf("[emulator] start race lost - waiting for peer's boot")
 		}
 	}
 
@@ -709,7 +709,7 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 		return t.Description
 	}
 	return t.Description +
-		"\n\nAttached screenshots — use the Read tool to view each before planning and implementing:\n- " +
+		"\n\nAttached screenshots - use the Read tool to view each before planning and implementing:\n- " +
 		strings.Join(refs, "\n- ")
 }
 

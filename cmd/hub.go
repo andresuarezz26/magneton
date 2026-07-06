@@ -116,7 +116,7 @@ func (m monitorModel) renderPalette(w int) string {
 	var b strings.Builder
 	title := "Actions"
 	if s := m.selected(); s != nil {
-		title = "Actions — " + s.Ticket
+		title = "Actions - " + s.Ticket
 	}
 	b.WriteString(headerStyle.Render("  "+title) + "\n\n")
 	for i, it := range m.paletteItems() {
@@ -404,7 +404,7 @@ func (m monitorModel) openStackPicker(i int) (tea.Model, tea.Cmd) {
 // filteredBranches returns the picker list: a sentinel "none" row followed by
 // branches whose name contains the current filter (case-insensitive).
 func (m monitorModel) filteredBranches() []git.Branch {
-	none := git.Branch{Name: "— none (default base) —"}
+	none := git.Branch{Name: "- none (default base) -"}
 	if m.stackFilter == "" {
 		return append([]git.Branch{none}, m.stackBranches...)
 	}
@@ -430,7 +430,7 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if m.stackCursor < len(list) {
 			b := list[m.stackCursor]
-			if b.Name != "— none (default base) —" {
+			if b.Name != "- none (default base) -" {
 				m.runTickets[i].base = b.Name
 			}
 		}
@@ -476,7 +476,7 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m monitorModel) renderRunStack(w int) string {
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
-	b.WriteString(dimStyle.Render("  the PR will target this branch — pick “— none —” for the default, esc cancels") + "\n\n")
+	b.WriteString(dimStyle.Render("  the PR will target this branch - pick “- none -” for the default, esc cancels") + "\n\n")
 
 	// Show existing chips for context.
 	for _, t := range m.runTickets {
@@ -504,7 +504,7 @@ func (m monitorModel) renderRunStack(w int) string {
 		tag := ""
 		if br.Remote {
 			tag = dimStyle.Render(" (remote)")
-		} else if br.Name != "— none (default base) —" {
+		} else if br.Name != "- none (default base) -" {
 			tag = dimStyle.Render(" (local)")
 		}
 		line := "   " + br.Name + tag
@@ -912,7 +912,7 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //
 // Models are free-text on purpose: the set of usable model identifiers depends
 // on the account (personal vs enterprise) and the org's policy, and Claude Code
-// fetches that list at runtime — there's no offline list magneton could show
+// fetches that list at runtime - there's no offline list magneton could show
 // without it going stale or offering models a company forbids. Leave a model
 // blank to inherit Claude Code's configured default; or type the exact id your
 // account allows (e.g. "sonnet", "claude-opus-4-8", or a Bedrock/Vertex id).
@@ -1011,7 +1011,7 @@ func (m *monitorModel) openSetupForm() {
 			if key := strings.TrimSpace(f[n+1].value); key != "" {
 				_ = secrets.Set(secrets.Anthropic, key)
 			}
-			return formDoneMsg{notice: "setup saved — pick Doctor to verify"}
+			return formDoneMsg{notice: "setup saved - pick Doctor to verify"}
 		},
 	}
 	m.view = viewForm

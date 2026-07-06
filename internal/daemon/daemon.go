@@ -1,6 +1,6 @@
 // Package daemon runs a periodic cleanup loop for the background agent fleet.
 // Ticket intake is done via `magneton run` (Phase 1); the daemon owns cleanup
-// and emulator lifecycle only (Decisions 2, 5, 8 — JQL polling deferred).
+// and emulator lifecycle only (Decisions 2, 5, 8 - JQL polling deferred).
 package daemon
 
 import (
@@ -85,7 +85,7 @@ func cleanupResolved(st *store.Store) {
 				next = store.StateMerged
 			}
 			_ = st.SetState(s.Ticket, next, s.Retries)
-			logf("[%s] %s — worktree reclaimed", s.Ticket, next)
+			logf("[%s] %s - worktree reclaimed", s.Ticket, next)
 		}
 	}
 }
@@ -107,7 +107,7 @@ func idleShutdownEmulators(st *store.Store, cfg *config.Config) {
 	if time.Now().Unix()-lastUsed < idleSecs {
 		return
 	}
-	logf("[emulator] idle timeout — shutting down %s (pid %d)", cfg.AVDName, pid)
+	logf("[emulator] idle timeout - shutting down %s (pid %d)", cfg.AVDName, pid)
 	build.Kill(pid)
 	_ = st.SetEmulatorIdle(cfg.AVDName)
 }
@@ -121,7 +121,7 @@ func shutdownEmulators(st *store.Store, cfg *config.Config) {
 	if err != nil || state == store.EmulatorIdle || pid == 0 {
 		return
 	}
-	logf("[emulator] daemon shutdown — killing %s (pid %d)", cfg.AVDName, pid)
+	logf("[emulator] daemon shutdown - killing %s (pid %d)", cfg.AVDName, pid)
 	build.Kill(pid)
 	_ = st.SetEmulatorIdle(cfg.AVDName)
 }

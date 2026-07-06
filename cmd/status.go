@@ -46,7 +46,7 @@ func printStatus(st *store.Store) error {
 		return err
 	}
 	if len(sessions) == 0 {
-		fmt.Println("no sessions yet — `agent run <TICKET>` or `agent start`")
+		fmt.Println("no sessions yet - `agent run <TICKET>` or `agent start`")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

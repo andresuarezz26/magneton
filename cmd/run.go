@@ -183,12 +183,12 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	// also pending could fire two runs on the same worktree at once. The state
 	// check is essential: in a terminal state (needs-you/failed/review/…) the
 	// driver process has already exited, so its recorded PID is stale and may have
-	// been recycled by an unrelated process — guarding on liveness alone would
+	// been recycled by an unrelated process - guarding on liveness alone would
 	// wrongly report "already running".
 	if existing, err := st.Get(sp.ticket); err == nil && existing != nil &&
 		store.IsActive(existing.State) &&
 		existing.PID != 0 && existing.PID != os.Getpid() && processAlive(existing.PID) {
-		logf("[%s] already running (pid %d) — refusing to start a second run", sp.ticket, existing.PID)
+		logf("[%s] already running (pid %d) - refusing to start a second run", sp.ticket, existing.PID)
 		return runner.Outcome{State: existing.State,
 			Err: fmt.Errorf("%s already running (pid %d)", sp.ticket, existing.PID)}
 	}
@@ -262,7 +262,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	case out.Err != nil:
 		logf("[%s] ✗ %s: %v", sp.ticket, out.State, out.Err)
 	case out.State == store.StateReview:
-		logf("[%s] ✓ review — PR ready: %s", sp.ticket, out.PRURL)
+		logf("[%s] ✓ review - PR ready: %s", sp.ticket, out.PRURL)
 	default:
 		logf("[%s] ended in state: %s", sp.ticket, out.State)
 	}

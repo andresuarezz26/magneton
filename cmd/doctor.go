@@ -42,13 +42,13 @@ func checkSDKBinary(name, sdkPath, hint string) error {
 	if p := resolveSDKBinary(name, sdkPath); p != "" {
 		return nil
 	}
-	return fmt.Errorf("not found in PATH or %s — %s", sdkPath, hint)
+	return fmt.Errorf("not found in PATH or %s - %s", sdkPath, hint)
 }
 
 func checkAVD(avdName, sdkPath string) error {
 	emuBin := resolveSDKBinary("emulator", sdkPath)
 	if emuBin == "" {
-		return errors.New("emulator binary not found — cannot verify AVD")
+		return errors.New("emulator binary not found - cannot verify AVD")
 	}
 	out, err := exec.Command(emuBin, "-list-avds").Output()
 	if err != nil {
@@ -59,7 +59,7 @@ func checkAVD(avdName, sdkPath string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("AVD %q not found — run: avdmanager list avd", avdName)
+	return fmt.Errorf("AVD %q not found - run: avdmanager list avd", avdName)
 }
 
 func checkGH() error {
@@ -67,7 +67,7 @@ func checkGH() error {
 		return errors.New("not found in PATH")
 	}
 	if err := exec.Command("gh", "auth", "status").Run(); err != nil {
-		return errors.New("installed but not authenticated — run: gh auth login")
+		return errors.New("installed but not authenticated - run: gh auth login")
 	}
 	return nil
 }
@@ -86,18 +86,18 @@ func init() {
 			jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
 			report("Jira", jc.Verify())
 			for _, r := range cfg.Repos {
-				report("git remote (origin) — "+r.Path, checkGitRemote(config.Expand(r.Path)))
+				report("git remote (origin) - "+r.Path, checkGitRemote(config.Expand(r.Path)))
 			}
 			report("claude CLI", exec.Command("claude", "--version").Run())
 			report("gh CLI", checkGH())
 
-			fmt.Println("\nemulator (optional — used automatically for UI/instrumentation tasks)")
+			fmt.Println("\nemulator (optional - used automatically for UI/instrumentation tasks)")
 			report("adb", checkSDKBinary("adb", cfg.AndroidSDKPath, "install Android SDK platform-tools"))
 			report("emulator", checkSDKBinary("emulator", cfg.AndroidSDKPath, "install Android SDK emulator package"))
 			if cfg.AVDName != "" {
 				report("AVD "+cfg.AVDName, checkAVD(cfg.AVDName, cfg.AndroidSDKPath))
 			} else {
-				fmt.Println("  ℹ avd_name not set in config — tasks needing emulator will fall back to unit tests")
+				fmt.Println("  ℹ avd_name not set in config - tasks needing emulator will fall back to unit tests")
 			}
 			return nil
 		},

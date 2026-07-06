@@ -34,7 +34,7 @@ Releases are automated via GitHub Actions + GoReleaser. Pushing a `v*` tag trigg
 git push origin :v0.2.0   # delete from remote
 git tag -d v0.2.0          # delete locally
 git tag v0.2.0             # re-tag at current HEAD
-git push origin v0.2.0     # push again — triggers the pipeline
+git push origin v0.2.0     # push again - triggers the pipeline
 ```
 
 ## Homebrew tap (not yet active)
@@ -45,7 +45,7 @@ The `.goreleaser.yaml` has the Homebrew config commented out. To enable it:
 2. Uncomment the `brews:` section in `.goreleaser.yaml`.
 3. Add a `HOMEBREW_TAP_GITHUB_TOKEN` secret to the repo with a token that has
    write access to `homebrew-magneton`.
-4. Tag a new release — GoReleaser will push the formula automatically.
+4. Tag a new release - GoReleaser will push the formula automatically.
 
 Users can then install with:
 

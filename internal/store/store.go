@@ -33,8 +33,8 @@ const (
 )
 
 // IsActive reports whether state means a run is actively in progress (a driver
-// process should be alive). Terminal/idle states — review, needs-you, failed,
-// merged, closed, stopped, awaiting-answer — return false: the driving process
+// process should be alive). Terminal/idle states - review, needs-you, failed,
+// merged, closed, stopped, awaiting-answer - return false: the driving process
 // has already exited, so its recorded PID is stale and a new run is allowed.
 func IsActive(state string) bool {
 	switch state {

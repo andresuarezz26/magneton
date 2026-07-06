@@ -62,7 +62,7 @@ func launchHub() error {
 			tel.Track("tui_opened", nil)
 		}
 	} else if cfgErr == nil {
-		// Consent not yet given — show the consent screen first.
+		// Consent not yet given - show the consent screen first.
 		initialView = viewConsent
 	}
 
@@ -102,7 +102,7 @@ func freshest(s store.Session) time.Time {
 }
 
 // pidAlive reports whether process pid currently exists (deterministic, via
-// signal 0). EPERM means it exists but we can't signal it — still alive.
+// signal 0). EPERM means it exists but we can't signal it - still alive.
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -297,19 +297,19 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.notice = "answer failed: " + msg.err.Error()
 		} else {
-			m.notice = "answer sent to " + msg.ticket + " — resuming…"
+			m.notice = "answer sent to " + msg.ticket + " - resuming…"
 		}
 		return m, nil
 	case cancelDoneMsg:
-		m.notice = "stopped " + msg.ticket + " — process killed, worktree removed"
+		m.notice = "stopped " + msg.ticket + " - process killed, worktree removed"
 		m.reload()
 		return m, nil
 	case pauseDoneMsg:
-		m.notice = "paused " + msg.ticket + " — agent stopped, worktree kept (NEEDS YOU)"
+		m.notice = "paused " + msg.ticket + " - agent stopped, worktree kept (NEEDS YOU)"
 		m.reload()
 		return m, nil
 	case doctorDoneMsg:
-		m.outputTitle = "doctor — connectivity check"
+		m.outputTitle = "doctor - connectivity check"
 		m.outputText = msg.out
 		m.view = viewOutput
 		return m, nil
@@ -325,7 +325,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tel.Configure(msg.enabled, msg.deviceID, telemetry.Version)
 		if msg.enabled {
 			m.tel.Track("tui_opened", nil)
-			m.notice = "telemetry enabled — thanks for helping!"
+			m.notice = "telemetry enabled - thanks for helping!"
 		}
 		m.view = viewDashboard
 		return m, nil
@@ -516,7 +516,7 @@ func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // submitAnswer appends the answer to the .md source file and relaunches. This
 // only works for local tickets (SourcePath set). For Jira tickets the action
-// is not offered — use "Open in Claude Code" to answer in the session directly.
+// is not offered - use "Open in Claude Code" to answer in the session directly.
 func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 	self, st := m.selfPath, m.store
 	return func() tea.Msg {
@@ -527,7 +527,7 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 			}
 		}
 		if sourcePath == "" {
-			return answerDoneMsg{ticket: key, err: fmt.Errorf("answer via TUI only works for local .md tickets — use \"Open in Claude Code\" to answer in the session")}
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("answer via TUI only works for local .md tickets - use \"Open in Claude Code\" to answer in the session")}
 		}
 		raw, err := os.ReadFile(sourcePath)
 		if err != nil {
@@ -584,7 +584,7 @@ func (m monitorModel) renderConsent(w int) string {
 	b.WriteString(dimStyle.Render("    • which commands run (run, doctor, etc.)") + "\n")
 	b.WriteString(dimStyle.Render("    • run outcome (success / failed / needs-human)") + "\n")
 	b.WriteString(dimStyle.Render("    • OS type and magneton version") + "\n\n")
-	b.WriteString("  " + ctaStyle.Render(" Y ") + "  yes — help make magneton better\n\n")
+	b.WriteString("  " + ctaStyle.Render(" Y ") + "  yes - help make magneton better\n\n")
 	b.WriteString("  " + dimStyle.Render("N") + "  no thanks\n")
 	return b.String()
 }
@@ -686,7 +686,7 @@ func (m monitorModel) renderDashboardBody(w int) string {
 	}
 
 	if len(m.flat) == 0 {
-		b.WriteString("  " + dimStyle.Render("no agents running yet — select the row above and press enter to start one"))
+		b.WriteString("  " + dimStyle.Render("no agents running yet - select the row above and press enter to start one"))
 		return b.String()
 	}
 	idx := 2 // agents start at cursor index 2 (0=Start-new 1=Edit-config)
@@ -789,28 +789,28 @@ func whyLines(s store.Session) []string {
 			reason = fmt.Sprintf("process %d is gone", s.PID)
 		}
 		return []string{
-			fmt.Sprintf("■ Stopped — %s. Re-run the ticket to resume.", reason),
+			fmt.Sprintf("■ Stopped - %s. Re-run the ticket to resume.", reason),
 			"  Press o to inspect the worktree.",
 		}
 	}
 	switch s.State {
 	case "awaiting-answer":
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && len(plan.Questions) > 0 {
-			out := []string{fmt.Sprintf("▮ Needs you — press ↵ enter to answer %d question(s):", len(plan.Questions))}
+			out := []string{fmt.Sprintf("▮ Needs you - press ↵ enter to answer %d question(s):", len(plan.Questions))}
 			for i, q := range plan.Questions {
 				out = append(out, fmt.Sprintf("  Q%d %s", i+1, q))
 			}
 			return out
 		}
-		return []string{"▮ Needs you — press ↵ enter to respond (see log below)."}
+		return []string{"▮ Needs you - press ↵ enter to respond (see log below)."}
 	case "failed":
 		return []string{
-			"✗ Failed — " + failReason(s.Ticket),
+			"✗ Failed - " + failReason(s.Ticket),
 			"  Open Android Studio (o) to fix, then press R to gate & open the PR.",
 		}
 	case "needs-you":
 		return []string{
-			"⚑ Needs you — the agent got stuck (see log below).",
+			"⚑ Needs you - the agent got stuck (see log below).",
 			"  Open Android Studio (o) to fix, then press R to gate & open the PR.",
 		}
 	}

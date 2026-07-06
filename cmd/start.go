@@ -31,7 +31,7 @@ func init() {
 
 			// Single-instance guard via pidfile.
 			if pid, ok := readPid(); ok && processAlive(pid) {
-				return fmt.Errorf("daemon already running (pid %d) — use `agent stop`", pid)
+				return fmt.Errorf("daemon already running (pid %d) - use `agent stop`", pid)
 			}
 			if err := os.WriteFile(paths.PidFile(), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
 				return err
@@ -52,7 +52,7 @@ func init() {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			pid, ok := readPid()
 			if !ok {
-				return fmt.Errorf("no daemon pidfile at %s — is it running?", paths.PidFile())
+				return fmt.Errorf("no daemon pidfile at %s - is it running?", paths.PidFile())
 			}
 			if !processAlive(pid) {
 				_ = os.Remove(paths.PidFile())

@@ -135,7 +135,7 @@ func TestDetectTicketID(t *testing.T) {
 		"[ABC-45] Add pull to refresh":              "ABC-45",
 		"see https://x.atlassian.net/browse/PLEX-7": "PLEX-7",
 		"lower proj-9 works":                        "PROJ-9",
-		"# TICKET-4 — Empty State for Saved Papers": "TICKET-4",
+		"# TICKET-4 - Empty State for Saved Papers": "TICKET-4",
 	}
 	for in, want := range found {
 		if got, ok := detectTicketID(in); !ok || got != want {
@@ -166,10 +166,10 @@ func TestIsTicketKey(t *testing.T) {
 
 func TestStripIDPrefix(t *testing.T) {
 	cases := []struct{ title, id, want string }{
-		{"TICKET-3 — Add Pull-to-Refresh on Feed", "TICKET-3", "Add Pull-to-Refresh on Feed"},
+		{"TICKET-3 - Add Pull-to-Refresh on Feed", "TICKET-3", "Add Pull-to-Refresh on Feed"},
 		{"PROJ-1: Do the thing", "PROJ-1", "Do the thing"},
 		{"PROJ-1 - fix bug", "PROJ-1", "fix bug"},
-		{"ticket-3 — lower key", "TICKET-3", "lower key"},  // case-insensitive
+		{"ticket-3 - lower key", "TICKET-3", "lower key"},  // case-insensitive
 		{"Add a file", "TICKET-1", "Add a file"},           // no prefix → unchanged
 		{"TICKET-30 stuff", "TICKET-3", "TICKET-30 stuff"}, // no separator after id → unchanged
 		{"TICKET-3", "TICKET-3", "TICKET-3"},               // title is only the id
@@ -232,14 +232,14 @@ func TestNormalizeNewlines(t *testing.T) {
 // like one line and the title/render get corrupted.
 func TestPastedContentCRLF(t *testing.T) {
 	// The ticket the user pasted, with \r line endings as a terminal sends them.
-	raw := "# TICKET-3 — Add Pull-to-Refresh on Feed\r\r## Summary\rAdd pull-to-refresh.\r\r## Priority\rLow\r"
+	raw := "# TICKET-3 - Add Pull-to-Refresh on Feed\r\r## Summary\rAdd pull-to-refresh.\r\r## Priority\rLow\r"
 	blob := normalizeNewlines(raw)
 
 	if n := lineCount(blob); n != 7 {
 		t.Errorf("lineCount = %d, want 7 (paste was seen as 1 line before the fix)", n)
 	}
 	title, _, err := parseTicketContent(blob)
-	if err != nil || title != "TICKET-3 — Add Pull-to-Refresh on Feed" {
+	if err != nil || title != "TICKET-3 - Add Pull-to-Refresh on Feed" {
 		t.Errorf("title = %q, err = %v", title, err)
 	}
 	if id, ok := detectTicketID(blob); !ok || id != "TICKET-3" {

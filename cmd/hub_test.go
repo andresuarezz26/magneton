@@ -29,7 +29,7 @@ func TestStackEscCancelsContentDoesNotLaunch(t *testing.T) {
 	nm, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEsc})
 	hub := nm.(monitorModel)
 	if cmd != nil {
-		t.Error("Esc on a content stack step returned a command — it must not launch")
+		t.Error("Esc on a content stack step returned a command - it must not launch")
 	}
 	if hub.view != viewDashboard {
 		t.Errorf("Esc should return to the dashboard, got view=%d", hub.view)
@@ -46,7 +46,7 @@ func TestStackEscCancelsContentDoesNotLaunch(t *testing.T) {
 // (returns a non-nil command).
 func TestStackEnterContentLaunches(t *testing.T) {
 	m := stackModel("content")
-	m.stackCursor = 0 // the "— none —" row
+	m.stackCursor = 0 // the "- none -" row
 	_, cmd := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Error("Enter on a content stack step should launch (non-nil command)")
@@ -71,10 +71,10 @@ func TestStackEnterSetsBase(t *testing.T) {
 	}
 }
 
-// Enter on the "— none —" row leaves the base empty (default) and does not launch.
+// Enter on the "- none -" row leaves the base empty (default) and does not launch.
 func TestStackEnterNoneKeepsDefault(t *testing.T) {
 	m := stackModel("jira")
-	m.stackCursor = 0 // the "— none —" row
+	m.stackCursor = 0 // the "- none -" row
 	nm, _ := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
 	hub := nm.(monitorModel)
 	if len(hub.runTickets) != 1 || hub.runTickets[0].base != "" {

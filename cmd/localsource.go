@@ -128,7 +128,7 @@ func isImageExt(name string) bool {
 }
 
 // stripIDPrefix removes a leading ticket-id from a title so it isn't shown (and
-// slugified into the branch) twice. Jira-style titles often read "TICKET-3 — Add
+// slugified into the branch) twice. Jira-style titles often read "TICKET-3 - Add
 // X"; with the id already in the chip and the "ai/{ticket}-{slug}" branch, that
 // prefix is redundant. Only strips when a separator (or end) follows the id, so
 // "TICKET-30 …" is left intact when the id is "TICKET-3".
@@ -144,7 +144,7 @@ func stripIDPrefix(title, id string) string {
 	if rest == "" {
 		return title // title is only the id
 	}
-	trimmed := strings.TrimLeft(rest, " \t-—–:·|.")
+	trimmed := strings.TrimLeft(rest, " \t--–:·|.")
 	if trimmed == rest || trimmed == "" {
 		return title // no separator after the id, or nothing left
 	}
@@ -165,7 +165,7 @@ func parseTicketContent(raw string) (title, body string, err error) {
 			continue
 		}
 		if sectionHeads[strings.ToLower(m[1])] {
-			continue // a section header, not a title — keep the body intact
+			continue // a section header, not a title - keep the body intact
 		}
 		title = m[1]
 		body = strings.TrimLeft(strings.Join(lines[i+1:], "\n"), "\n")
@@ -188,7 +188,7 @@ func parseTicketContent(raw string) (title, body string, err error) {
 }
 
 // detectTicketID pulls the first Jira-style key (e.g. PROJ-123) out of free-form
-// ticket text — the instant, offline fast-path before falling back to an AI
+// ticket text - the instant, offline fast-path before falling back to an AI
 // extraction pass. Returns the id uppercased, or ("", false) when none is found.
 func detectTicketID(content string) (string, bool) {
 	if m := ticketIDRe.FindStringSubmatch(content); m != nil {

@@ -32,7 +32,7 @@ checksum:
 # signs:
 #   - artifacts: binary
 
-# Homebrew tap — uncomment once andresuarezz26/homebrew-magneton repo exists
+# Homebrew tap - uncomment once andresuarezz26/homebrew-magneton repo exists
 # brews:
 #   - name: magneton
 #     ids: [dist]

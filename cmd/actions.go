@@ -46,22 +46,22 @@ func agentActions(s store.Session) []paletteItem {
 		if stuck {
 			items = append(items,
 				paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"},
-				paletteItem{"ship", "Open a PR", "skip verification — commit + push + PR (when the gate itself is unreliable here)"},
+				paletteItem{"ship", "Open a PR", "skip verification - commit + push + PR (when the gate itself is unreliable here)"},
 			)
 		}
 		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
 		// "Open in Claude Code" resumes the agent's session. Only offer it when no
-		// run is active — otherwise the headless agent and this interactive session
+		// run is active - otherwise the headless agent and this interactive session
 		// would both write to the same session on disk and diverge.
 		if !active {
 			items = append(items, paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"})
 		}
 	} else if stuck {
-		// Worktree is gone (stopped/cleaned, or it never built) — only a fresh run is possible.
-		items = append(items, paletteItem{"rerun", "Run again (fresh)", "no worktree left — start this ticket from scratch"})
+		// Worktree is gone (stopped/cleaned, or it never built) - only a fresh run is possible.
+		items = append(items, paletteItem{"rerun", "Run again (fresh)", "no worktree left - start this ticket from scratch"})
 	}
 	// Stop is available for live/stuck rows (kills the process, removes the
-	// worktree, and clears it into STOPPED) — but not for finished or already-
+	// worktree, and clears it into STOPPED) - but not for finished or already-
 	// stopped rows.
 	if !done && s.State != store.StateStopped {
 		items = append(items, paletteItem{"stop", "Stop & clean up", "kill the process and remove the worktree"})
@@ -83,10 +83,10 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
 	// session to fix it by hand. Chain magneton's own gate+PR after the
 	// interactive session exits, so finishing the fix automatically re-runs
-	// verification and opens the PR — no need to come back and tap "Create PR
+	// verification and opens the PR - no need to come back and tap "Create PR
 	// from my fix". `run --resume` writes to the store, so the dashboard reflects
 	// the outcome. (If the user closes the window instead of exiting claude the
-	// chained command can't run — an inherent limit of doing this in-terminal.)
+	// chained command can't run - an inherent limit of doing this in-terminal.)
 	stuck := s.State == "needs-you" || s.State == "failed" || s.State == store.StateStopped || isStopped(s)
 	if self, err := os.Executable(); err == nil && stuck {
 		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
@@ -154,7 +154,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "pause":
 		if s := m.selected(); s != nil {
-			m.notice = "pausing " + s.Ticket + " — moving to NEEDS YOU…"
+			m.notice = "pausing " + s.Ticket + " - moving to NEEDS YOU…"
 			return m, m.pauseAgent(*s)
 		}
 	case "stop":
