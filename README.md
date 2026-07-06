@@ -59,13 +59,19 @@ magneton                          # TUI dashboard: queue tickets, watch live sta
 magneton init                     # configure repo, build commands, optional Jira
 
 magneton run PROJ-123             # one Jira ticket → PR
+magneton run PROJ-123 PROJ-124    # two Jira tickets in parallel
 magneton run a.md b.md c.md       # local markdown tickets, in parallel
 
 magneton run PROJ-123 --dry-run   # skip push + PR (try this first)
-magneton run PROJ-123 --resume    # re-verify a worktree you fixed by hand
-magneton run PROJ-124 --base ai/proj-123  # stack on another ticket's branch
+magneton run PROJ-123 --resume    # re-verify a worktree you fixed by hand, then PR
+magneton run PROJ-123 --ship      # skip verification: commit + push + PR from your manual fix
+magneton run PROJ-124 --base ai/proj-123  # stack on another ticket's branch; PR targets it
 
 magneton doctor                   # check Jira, git, claude, gh connectivity
+magneton logs PROJ-123            # print the session log for a ticket
+magneton status                   # table of all sessions
+magneton start                    # start the background daemon
+magneton stop                     # stop the daemon
 ```
 
 In the TUI, add tickets three ways: **paste** the ticket text (from Jira, Linear, anywhere - screenshots attach by drag), enter a **Jira key**, or point at a **.md file**. Queue several, press enter, watch the dashboard.
