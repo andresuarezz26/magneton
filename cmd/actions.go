@@ -78,7 +78,11 @@ type claudeClosedMsg struct{ err error }
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Repo, s.Ticket)) + " && claude"
 	if s.SessionID != "" {
-		cmdline += " --resume " + shellQuote(s.SessionID)
+		// Resumed sessions keep the model they were saved with (per Claude Code
+		// docs), so without an override the interactive window would reopen on
+		// whatever model the headless stage ran - not what the user expects.
+		// "--model default" clears that and reverts to the user's/org's default.
+		cmdline += " --resume " + shellQuote(s.SessionID) + " --model default"
 	}
 	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
 	// session to fix it by hand. Chain magneton's own gate+PR after the
