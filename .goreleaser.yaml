@@ -32,18 +32,20 @@ checksum:
 # signs:
 #   - artifacts: binary
 
-brews:
-  - name: magneton
-    repository:
-      owner: andresuarezz26
-      name: homebrew-magneton
-    homepage: "https://github.com/andresuarezz26/magneton"
-    description: "Autonomous Android ticket → PR agent"
-    license: "MIT"
-    install: |
-      bin.install "magneton"
-    test: |
-      system "#{bin}/magneton", "--version"
+# Homebrew tap — uncomment once andresuarezz26/homebrew-magneton repo exists
+# brews:
+#   - name: magneton
+#     ids: [dist]
+#     repository:
+#       owner: andresuarezz26
+#       name: homebrew-magneton
+#     homepage: "https://github.com/andresuarezz26/magneton"
+#     description: "Autonomous Android ticket → PR agent"
+#     license: "MIT"
+#     install: |
+#       bin.install "magneton"
+#     test: |
+#       system "#{bin}/magneton", "--version"
 
 release:
   draft: false
