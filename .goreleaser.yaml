@@ -19,8 +19,9 @@ builds:
     hooks:
       post:
         # Ad-hoc codesign macOS binaries so Gatekeeper doesn't kill them on
-        # Sonoma/Sequoia. The `file` check skips Linux ELF artifacts.
-        - cmd: sh -c 'file "$1" | grep -q Mach-O && codesign --sign - --force "$1" || true' -- "{{ .Path }}"
+        # Sonoma/Sequoia. The `if` skips Linux ELF artifacts but still fails
+        # the build if codesign errors on a Mach-O - never ship unsigned.
+        - cmd: sh -c 'if file "$1" | grep -q Mach-O; then codesign --sign - --force "$1"; fi' -- "{{ .Path }}"
 
 archives:
   - id: dist

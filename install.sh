@@ -41,14 +41,24 @@ URL="https://github.com/$REPO/releases/download/$LATEST/$BINARY"
 mkdir -p "$INSTALL_DIR"
 
 echo "Downloading magneton $LATEST ($OS/$ARCH)…"
-curl -fsSL "$URL" -o "$INSTALL_DIR/magneton"
-chmod +x "$INSTALL_DIR/magneton"
+# Download to a temp file and rename into place. Never write over the existing
+# binary in place: the macOS kernel caches code-signing info per inode, and an
+# in-place overwrite leaves a stale cache that kills the new binary on launch
+# ("zsh: killed"). A rename swaps in a fresh inode atomically, and also keeps
+# a running magneton usable during the swap.
+TMP="$INSTALL_DIR/.magneton.download.$$"
+trap 'rm -f "$TMP"' EXIT
+curl -fsSL "$URL" -o "$TMP"
+chmod +x "$TMP"
 
 # macOS marks curl-downloaded binaries as quarantined; remove the flag so
-# Gatekeeper doesn't kill the process on first launch.
+# Gatekeeper doesn't block the first launch.
 if [ "$OS" = "darwin" ]; then
-  xattr -d com.apple.quarantine "$INSTALL_DIR/magneton" 2>/dev/null || true
+  xattr -d com.apple.quarantine "$TMP" 2>/dev/null || true
 fi
+
+mv -f "$TMP" "$INSTALL_DIR/magneton"
+trap - EXIT
 
 echo "✓ Installed → $INSTALL_DIR/magneton"
 
