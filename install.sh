@@ -44,6 +44,12 @@ echo "Downloading magneton $LATEST ($OS/$ARCH)…"
 curl -fsSL "$URL" -o "$INSTALL_DIR/magneton"
 chmod +x "$INSTALL_DIR/magneton"
 
+# macOS marks curl-downloaded binaries as quarantined; remove the flag so
+# Gatekeeper doesn't kill the process on first launch.
+if [ "$OS" = "darwin" ]; then
+  xattr -d com.apple.quarantine "$INSTALL_DIR/magneton" 2>/dev/null || true
+fi
+
 echo "✓ Installed → $INSTALL_DIR/magneton"
 
 # ── PATH ──────────────────────────────────────────────────────────────────────
