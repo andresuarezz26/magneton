@@ -25,7 +25,9 @@ flowchart TD
     C --> D[Verify]
     D -->|pass| E[Pull Request]
     D -->|fail| C
-    D -->|blocked| F[NEEDS YOU]
+    B -. blocked .-> F[NEEDS YOU]
+    C -. blocked .-> F
+    D -. blocked .-> F
 ```
 
 | Stage | What it does |
