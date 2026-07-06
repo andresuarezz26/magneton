@@ -2,7 +2,7 @@
 
 # Magneton
 
-> **Coding agents that don't need supervision. Drop in a ticket. Review the PR.**
+> **A CLI to run your Android development loop, instead of prompting Claude Code by hand.**
 
 Install with one command (macOS/Linux), then run `magneton init`:
 
@@ -10,7 +10,7 @@ Install with one command (macOS/Linux), then run `magneton init`:
 curl -fsSL https://raw.githubusercontent.com/andresuarezz26/magneton/main/install.sh | bash
 ```
 
-Magneton is an autonomous ticket → PR pipeline for Android. Each ticket runs plan → implement → verify in its own git worktree, in parallel, and opens a pull request only after the agent has actually seen the build and tests pass. If verification fails, the agent fixes and re-runs until it's green, or hands the ticket back to you. You don't prompt the agent; you review its PR like a colleague's.
+You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, in parallel, and only becomes a pull request after the agent has actually seen the build and tests pass. If verification fails, it fixes and re-runs until green, or hands the ticket back to you. You stay the reviewer, not the operator.
 
 **Requires:** [Claude Code](https://claude.ai/download) (authenticated), `git` + `gh`, [Android Studio](https://developer.android.com/studio).
 
@@ -87,6 +87,16 @@ Runs on your existing Claude Code subscription or API key. No separate account, 
 - **You still review.** Autonomous loops make autonomous mistakes; the PR gate is where your judgment goes.
 - Never auto-merges. Every ticket stops at review.
 - Well-defined tickets sail through; vague ones come back as questions.
+
+## Uninstall
+
+```bash
+magneton stop 2>/dev/null   # stop the daemon if it's running
+rm ~/.local/bin/magneton    # remove the binary
+rm -rf ~/.agent             # remove config, state, logs, and default worktrees
+```
+
+Magneton also creates a `<your-repo>-worktrees/` folder next to your Android repo. Delete it if you don't want the leftover worktrees. If you added a Jira token, it lives in your OS keychain under `magneton`. If you built from source, also `rm -rf ~/.magneton`.
 
 ## License
 
