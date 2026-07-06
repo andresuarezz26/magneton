@@ -17,6 +17,34 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// projectDirIn maps the configured repo path to its location inside a worktree.
+// When the repo path is a subdirectory of its git repository (monorepo: git
+// root at /repo, Android project at /repo/App), the worktree mirrors the whole
+// repository, so the project sits at the same relative offset - Android Studio
+// must open <worktree>/App, not the worktree root. Falls back to the worktree
+// root when the repo path IS the git root or anything fails to resolve.
+func projectDirIn(worktreeDir, repo string) string {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return worktreeDir
+	}
+	// git resolves symlinks in --show-toplevel; resolve the configured path the
+	// same way or Rel would mismatch (e.g. /var vs /private/var on macOS).
+	top := strings.TrimSpace(string(out))
+	repoPath, err := filepath.EvalSymlinks(filepath.Clean(repo))
+	if err != nil {
+		return worktreeDir
+	}
+	rel, err := filepath.Rel(top, repoPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return worktreeDir
+	}
+	if fi, err := os.Stat(filepath.Join(worktreeDir, rel)); err == nil && fi.IsDir() {
+		return filepath.Join(worktreeDir, rel)
+	}
+	return worktreeDir
+}
+
 // worktreeExists reports whether the ticket still has a usable git worktree.
 // "Stop & clean up" removes it, so Resume / Open Studio / Open Claude only make
 // sense when this is true.
@@ -115,7 +143,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "studio":
 		if s := m.selected(); s != nil {
-			wt := paths.WorktreeFor(s.Repo, s.Ticket)
+			wt := projectDirIn(paths.WorktreeFor(s.Repo, s.Ticket), s.Repo)
 			// Prefer the JetBrains `studio` launcher (opens the dir as a project);
 			// fall back to the macOS app.
 			if _, err := exec.LookPath("studio"); err == nil {
