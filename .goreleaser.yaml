@@ -7,8 +7,8 @@ before:
     - go mod tidy
 
 builds:
-  - id: agent
-    binary: agent          # command is `agent`; project/formula is `magneton`
+  - id: magneton
+    binary: magneton
     main: .
     env:
       - CGO_ENABLED=0       # pure-Go sqlite driver → static binaries
@@ -18,9 +18,12 @@ builds:
       - -s -w -X github.com/andresuarezz26/magneton/cmd.version={{.Version}}
 
 archives:
-  - id: default
+  - id: dist
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
+  - id: raw
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format: binary
 
 checksum:
   name_template: "checksums.txt"
@@ -38,9 +41,9 @@ brews:
     description: "Autonomous Android ticket → PR agent"
     license: "MIT"
     install: |
-      bin.install "agent"
+      bin.install "magneton"
     test: |
-      system "#{bin}/agent", "--version"
+      system "#{bin}/magneton", "--version"
 
 release:
   draft: false
