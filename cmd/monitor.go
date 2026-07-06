@@ -39,6 +39,9 @@ func init() {
 
 // launchHub opens the TUI hub. Shared by bare `agent` and `agent monitor`/`top`.
 func launchHub() error {
+	if err := paths.EnsureDirs(); err != nil {
+		return fmt.Errorf("cannot create ~/.agent directory: %w\nRun `magneton init` to configure your setup", err)
+	}
 	st, err := store.Open(paths.StateDB())
 	if err != nil {
 		return err
