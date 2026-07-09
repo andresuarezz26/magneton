@@ -2,7 +2,7 @@
 
 # Magneton
 
-> **A CLI to run your Android development loop, instead of prompting Claude Code by hand.**
+> **A CLI to run your Android development loops, instead of prompting Claude Code by hand.**
 
 You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, and only becomes a pull request after the agent has actually seen the build and tests pass. If verification fails, it fixes and re-runs until green, or hands the ticket back to you. You stay the reviewer, not the operator.
 
