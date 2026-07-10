@@ -4,9 +4,9 @@
 
 > **A CLI to run your Android development loops, instead of prompting Claude Code by hand.**
 
-You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, and only becomes a pull request after the agent has actually seen the build and tests pass. If verification fails, it fixes and re-runs until green, or hands the ticket back to you. You stay the reviewer, not the operator.
+You already use Claude Code to work tickets by hand: plan the change, make it, run the build and tests, open the PR, repeat for the next ticket. Magneton runs that loop for you. Each ticket goes through plan → implement → verify in its own git worktree, and convert it to a Pull Request. If verification fails, it fixes and re-runs until green, or hands the ticket back to you.
 
-Run many loops in parallel, follow all of them from one control panel, and get pinged when an agent is blocked.
+Run many loops in parallel, follow all of them from one control pane, and the process will move to NEEDS YOU when the agent gets stuck. 
 
 ## Install
 
@@ -36,21 +36,11 @@ flowchart TD
 
 | Stage | What it does |
 |-------|--------------|
-| **Plan** | Reads the codebase read-only, writes a focused plan, flags blocking questions, decides if the ticket needs an emulator (Compose/Espresso) or unit tests only |
+| **Plan** | Reads the codebase read-only, writes a focused plan, flags blocking question|
 | **Implement** | Makes the minimal change the plan describes, then adversarially reviews its own diff |
-| **Verify** | Discovers how *your* project builds, runs the real build + tests (boots the emulator if needed), certifies green only after seeing them pass |
+| **Verify** | Discovers how *your* project builds, runs the real build + tests (boots the emulator if needed) |
 
 When an agent gets stuck (an ambiguous ticket, a compile error it can't fix), the ticket flips to **NEEDS YOU**. Answer in the TUI, resume the Claude session, or open the worktree in Android Studio.
-
-## Why Android-native matters
-
-General ticket→PR agents (Devin, OpenHands, Copilot Workspace) don't know what verifying an Android change means. Magneton does:
-
-- **Emulator as a shared resource.** A SQLite-backed semaphore lets parallel agents take turns on one AVD; no two agents fight over a device.
-- **Instrumented vs. unit test routing.** Decided at plan time, enforced at verify time.
-- **Gradle-aware verification.** The agent discovers your project's own build setup, including company build scripts.
-- **Worktree → Android Studio handoff.** One keystroke opens any agent's worktree in the IDE.
-- **Screenshot tickets.** Drag images into the terminal; the agent sees them while planning.
 
 ## Why I built it
 
@@ -85,12 +75,6 @@ Config lives at `~/.agent/config.toml`: repo path, per-stage models, branch nami
 ## Cost
 
 Runs on your existing Claude Code subscription or API key. No separate account, no markup. Each ticket is a full working session's worth of tokens; five parallel tickets ≈ five concurrent sessions. Start with one.
-
-## Caveats
-
-- **You still review.** Autonomous loops make autonomous mistakes; the PR gate is where your judgment goes.
-- Never auto-merges. Every ticket stops at review.
-- Well-defined tickets sail through; vague ones come back as questions.
 
 ## Uninstall
 
