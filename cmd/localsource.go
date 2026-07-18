@@ -96,7 +96,7 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 }
 
 // discoverPastedImages returns sibling image files when the ticket .md lives in a
-// magneton-controlled pasted dir (~/.agent/pasted/<id>/). Returns nil for a user's
+// magneton-controlled pasted dir (~/.magneton/pasted/<id>/). Returns nil for a user's
 // own .md file, so we never sweep in unrelated images from their repo.
 func discoverPastedImages(mdPath string) []string {
 	dir := filepath.Dir(mdPath)

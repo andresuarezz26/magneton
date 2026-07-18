@@ -76,7 +76,7 @@ func (m monitorModel) paletteItems() []paletteItem {
 	items = append(items,
 		paletteItem{"run", "Start new ticket(s)", "launch a ticket key or .md file"},
 		paletteItem{"doctor", "Doctor", "connectivity + setup health check"},
-		paletteItem{"config", "Edit config", "edit ~/.agent/config.toml fields"},
+		paletteItem{"config", "Edit config", "edit ~/.magneton/config.toml fields"},
 		paletteItem{"setup", "Setup wizard", "configure Jira, repo, and tokens"},
 	)
 	if _, ok := daemonAlive(); ok {
@@ -509,16 +509,17 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m monitorModel) renderRunStack(w int) string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
-	b.WriteString(dimStyle.Render("  the PR will target this branch - pick “- none -” for the default, esc cancels") + "\n\n")
 
-	// Show existing chips for context.
+	// Show existing chips first so the context is always visible.
 	for _, t := range m.runTickets {
 		b.WriteString("  " + chipLabel(t) + "\n")
 	}
 	if len(m.runTickets) > 0 {
 		b.WriteString("\n")
 	}
+
+	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
+	b.WriteString(dimStyle.Render(`  the PR will target this branch - pick "- none -" for the default, esc cancels`) + "\n\n")
 
 	// Search box: the user types to filter the branch list below.
 	b.WriteString(headerStyle.Render("  Search branches") + "\n")
@@ -638,9 +639,9 @@ func (m monitorModel) renderRunInput(w int) string {
 	}
 	if m.runImgPrompt >= 0 && m.runImgPrompt < len(m.runTickets) {
 		n := len(m.runTickets[m.runImgPrompt].images)
+		chips()
 		b.WriteString(headerStyle.Render("  Attach images (optional)") + "\n")
 		b.WriteString(dimStyle.Render("  drag image files into the terminal, then enter") + "\n\n")
-		chips()
 		b.WriteString("  › " + m.runText + "▌\n")
 		b.WriteString("\n  " + dimStyle.Render(fmt.Sprintf("%d attached · enter done · esc skip", n)))
 		return b.String()
@@ -751,7 +752,7 @@ func (m monitorModel) spawnRun(args ...string) tea.Cmd {
 	}
 }
 
-// writePastedTicket saves a pasted ticket to ~/.agent/pasted/<id>/<id>.md (so
+// writePastedTicket saves a pasted ticket to ~/.magneton/pasted/<id>/<id>.md (so
 // ticketIDFromPath recovers <id>) and copies its images beside it. Returns the
 // .md path for `agent run`. Images are copied (not referenced) so a later
 // move/delete of the user's original screenshot can't break the run.
@@ -997,7 +998,7 @@ func (m *monitorModel) openConfigForm() {
 	}
 	m.form = &formModel{
 		title:  "Edit config",
-		note:   "~/.agent/config.toml · first repo",
+		note:   "~/.magneton/config.toml · first repo",
 		fields: configFields(cfg),
 		submit: func(f []formField) tea.Msg {
 			cfg, err := config.Load()
@@ -1031,7 +1032,7 @@ func (m *monitorModel) openSetupForm() {
 	)
 	m.form = &formModel{
 		title:  "Setup wizard",
-		note:   "writes ~/.agent/config.toml; tokens go to the OS keychain",
+		note:   "writes ~/.magneton/config.toml; tokens go to the OS keychain",
 		fields: fields,
 		submit: func(f []formField) tea.Msg {
 			cfg, err := config.Load()

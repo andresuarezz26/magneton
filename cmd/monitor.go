@@ -40,7 +40,7 @@ func init() {
 // launchHub opens the TUI hub. Shared by bare `agent` and `agent monitor`/`top`.
 func launchHub() error {
 	if err := paths.EnsureDirs(); err != nil {
-		return fmt.Errorf("cannot create ~/.agent directory: %w\nRun `magneton init` to configure your setup", err)
+		return fmt.Errorf("cannot create ~/.magneton directory: %w\nRun `magneton init` to configure your setup", err)
 	}
 	st, err := store.Open(paths.StateDB())
 	if err != nil {
@@ -149,7 +149,7 @@ func newGroups() []*group {
 		{label: "RUNNING", style: cyan, match: func(s store.Session) bool {
 			return isRunningState(s.State) && !isStopped(s)
 		}},
-		{label: "UNDER REVIEW", style: green, match: func(s store.Session) bool {
+		{label: "READY FOR REVIEW", style: green, match: func(s store.Session) bool {
 			return s.State == "review" || s.State == "merged" || s.State == "closed"
 		}},
 	}
@@ -209,8 +209,9 @@ type monitorModel struct {
 	answerCursor int         // index into answerAtoms (0..len)
 	notice       string      // transient status/error line under the footer
 
-	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
-	confirming string
+	// stop/cleanup confirmation; non-empty = awaiting selection for this ticket
+	confirming    string
+	confirmCursor int // 0 = "Yes, stop" / 1 = "No, keep running"
 
 	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
 	view            hubView
@@ -430,12 +431,13 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateConfirming handles the y/n stop-confirmation prompt.
+// updateConfirming handles the palette-style stop-confirmation prompt.
+// ↑/↓ moves the cursor; Enter selects; y/n are kept for backwards compat.
 func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
+	confirmYes := func() (tea.Model, tea.Cmd) {
 		key := m.confirming
 		m.confirming = ""
+		m.confirmCursor = 0
 		var target *store.Session
 		for i := range m.flat {
 			if m.flat[i].Ticket == key {
@@ -448,10 +450,42 @@ func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.notice = "stopping " + key + "…"
 		return m, m.cancelAgent(*target)
+	}
+	switch msg.String() {
+	case "up", "k":
+		m.confirmCursor = 0
+	case "down", "j":
+		m.confirmCursor = 1
+	case "enter":
+		if m.confirmCursor == 0 {
+			return confirmYes()
+		}
+		m.confirming = ""
+		m.confirmCursor = 0
+	case "y", "Y":
+		return confirmYes()
 	case "n", "N", "esc", "q":
 		m.confirming = ""
+		m.confirmCursor = 0
 	}
 	return m, nil
+}
+
+// renderConfirm renders the palette-style stop-confirmation view.
+func (m monitorModel) renderConfirm(w int) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("  Stop "+m.confirming+"?") + "\n")
+	b.WriteString(dimStyle.Render("  kills the process and removes the worktree") + "\n\n")
+	items := []string{"Yes, stop and clean up", "No, keep running"}
+	for i, item := range items {
+		if i == m.confirmCursor {
+			b.WriteString(selStyle.Render(" "+item) + "\n")
+		} else {
+			b.WriteString("  " + item + "\n")
+		}
+	}
+	return b.String()
 }
 
 // pauseAgent halts a live run: it kills the driving process (and its process
@@ -731,9 +765,7 @@ func (m monitorModel) View() string {
 	}
 
 	notice := ""
-	if m.confirming != "" {
-		notice = whyStyle.Render(truncate("  Stop "+m.confirming+"? This kills its process and removes its worktree.", w))
-	} else if m.notice != "" {
+	if m.notice != "" && m.confirming == "" {
 		notice = whyStyle.Render(truncate("  "+m.notice, w))
 	}
 	// Footer hint. Modal views render their own hints in the body.
@@ -743,9 +775,13 @@ func (m monitorModel) View() string {
 	} else if m.view == viewConsent {
 		footer = dimStyle.Render("  y: share · n: skip")
 	} else if m.confirming != "" {
-		footer = dimStyle.Render("  y: yes · n: no")
+		footer = dimStyle.Render("  ↑↓ move · enter select · esc cancel")
 	} else if m.answering {
 		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
+	}
+	// The confirming state replaces the body with a mini palette.
+	if m.confirming != "" {
+		body = m.renderConfirm(w)
 	}
 	return m.frame(b.String(), body, notice, footer, w)
 }

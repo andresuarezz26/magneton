@@ -181,7 +181,7 @@ func (c *Config) applyDefaults() {
 		r := &c.Repos[i]
 		r.Path = expand(r.Path)
 		if r.Branch == "" {
-			r.Branch = "ai/{ticket}-{slug}"
+			r.Branch = "{username}/{ticket}-{slug}"
 		}
 	}
 }

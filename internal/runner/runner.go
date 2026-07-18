@@ -82,6 +82,7 @@ func Run(t Task, h Hooks) Outcome {
 	branch := strings.NewReplacer(
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
+		"{username}", git.ResolveUsername(),
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
@@ -405,7 +406,8 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 		}
 		body = b
 	}
-	prURL, err := vcs.OpenPR(worktree, base, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary), body)
+	prTitle := prTitleFor(worktree, t.Ticket, t.Summary)
+	prURL, err := vcs.OpenPR(worktree, base, prTitle, body)
 	if err != nil {
 		setState(store.StateFailed, attempts-1)
 		return Outcome{State: store.StateFailed, Err: err}
@@ -504,6 +506,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 	branch := strings.NewReplacer(
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
+		"{username}", git.ResolveUsername(),
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
@@ -586,6 +589,7 @@ func shipOnly(t Task, h Hooks) Outcome {
 	branch := strings.NewReplacer(
 		"{ticket}", strings.ToLower(t.Ticket),
 		"{slug}", slugify(t.Summary),
+		"{username}", git.ResolveUsername(),
 	).Replace(repo.Branch)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
@@ -718,6 +722,21 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 	return t.Description +
 		"\n\nAttached screenshots - use the Read tool to view each before planning and implementing:\n- " +
 		strings.Join(refs, "\n- ")
+}
+
+// prTitleFor builds the PR title, prepending a [feat]/[bug]/[chore] prefix
+// when the ticket's plan.json records a type.
+func prTitleFor(worktree, ticket, summary string) string {
+	prefix := ""
+	if p, err := agent.ReadPlan(worktree); err == nil && p != nil {
+		switch p.Type {
+		case "feature":
+			prefix = "[feat]"
+		case "bug", "chore":
+			prefix = "[" + p.Type + "]"
+		}
+	}
+	return fmt.Sprintf("%s[%s] %s", prefix, ticket, summary)
 }
 
 func slugify(s string) string {

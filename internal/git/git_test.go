@@ -201,3 +201,13 @@ func TestPushForceAllowsRerun(t *testing.T) {
 		t.Fatalf("re-run push should force past the divergent remote branch: %v", err)
 	}
 }
+
+func TestResolveUsernameFallback(t *testing.T) {
+	// When gh is not available or returns an error, ResolveUsername must not
+	// return an empty string. The function is best-effort: we can't control
+	// the environment in CI, so just verify we get a non-empty result.
+	u := ResolveUsername()
+	if u == "" {
+		t.Error("ResolveUsername() = \"\", want a non-empty string")
+	}
+}

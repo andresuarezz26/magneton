@@ -11,16 +11,14 @@ import (
 	"golang.org/x/term"
 
 	"github.com/andresuarezz26/magneton/internal/config"
-	"github.com/andresuarezz26/magneton/internal/jira"
+	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 	"github.com/andresuarezz26/magneton/internal/vcs"
 )
 
 // Non-interactive fallback (CI / piped stdin): a commented config to edit by hand.
-const sampleConfig = `# magneton config - ~/.agent/config.toml
-jira_base_url = "https://your-org.atlassian.net"
-jira_email    = "you@your-org.com"
+const sampleConfig = `# magneton config - ~/.magneton/config.toml
 poll_interval = 30
 concurrency   = 3
 max_budget_usd = 5
@@ -45,7 +43,7 @@ max_budget_usd = 5
 
 [[repo]]
 path        = "~/src/android-app"
-branch      = "ai/{ticket}-{slug}"
+branch      = "{username}/{ticket}-{slug}"
 # base      = "main"
 # Build/test commands are intentionally not configured: the agent discovers and
 # runs verification itself (handles per-project setups and company build skills).
@@ -98,12 +96,23 @@ func wizard() error {
 	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 
-	// Required: repo settings. Build/test commands are no longer asked - the agent
-	// discovers and runs verification itself.
-	repo := config.Repo{
-		Path:   ask(r, "Repository path", "~/src/android-app"),
-		Branch: ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
+	// Required: repo path.
+	fmt.Println("\n  Tip: cd to your Android project in Terminal, then run: pwd")
+	repoPath := ask(r, "Repository path", "~/src/android-app")
+	if expanded := config.Expand(repoPath); expanded != "" {
+		if _, err := os.Stat(expanded); os.IsNotExist(err) {
+			fmt.Println("  (warn) that path doesn't exist yet — update it in", paths.Config(), "before running magneton")
+		}
 	}
+
+	// Branch pattern: default uses the developer's GitHub username.
+	username := git.ResolveUsername()
+	defaultBranch := username + "/{ticket}-{slug}"
+	fmt.Println("\n  Branch names use variables: {username}, {ticket}, {slug} (title as kebab-case).")
+	fmt.Printf("  Example: for TICKET-1 \"Add pull to refresh\" → %s/ticket-1-add-pull-to-refresh\n", username)
+	branchPattern := ask(r, "Branch pattern", defaultBranch)
+
+	repo := config.Repo{Path: repoPath, Branch: branchPattern}
 	cfg.Repos = []config.Repo{repo}
 
 	// Optional: per-stage models. Blank inherits whatever default Claude Code is
@@ -119,19 +128,6 @@ func wizard() error {
 	if tok := askSecret("Anthropic API key [optional - blank = use logged-in claude]"); tok != "" {
 		_ = secrets.Set(secrets.Anthropic, tok)
 		fmt.Println("  → saved to OS keychain")
-	}
-
-	// Optional: Jira integration.
-	fmt.Println("\n  - Jira integration [optional] ----------------------")
-	fmt.Println("  Skip these to run tickets from local .md files only.")
-	cfg.JiraBaseURL = strings.TrimRight(ask(r, "Jira base URL [optional]", ""), "/")
-	cfg.JiraEmail = ask(r, "Jira email [optional]", "")
-	if tok := askSecret("Jira API token [optional]"); tok != "" {
-		if err := secrets.Set(secrets.Jira, tok); err != nil {
-			fmt.Println("  (warn) could not store Jira token in keychain:", err)
-		} else {
-			fmt.Println("  → saved to OS keychain")
-		}
 	}
 
 	// Telemetry consent.
@@ -153,10 +149,6 @@ func wizard() error {
 	report("git remote (origin)", checkGitRemote(config.Expand(repo.Path)))
 	report("claude CLI", exec.Command("claude", "--version").Run())
 	report("gh CLI", exec.Command("gh", "auth", "status").Run())
-	if cfg.JiraBaseURL != "" {
-		jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-		report("Jira", jc.Verify())
-	}
 
 	fmt.Println("\nReady. Try:  magneton run ./ticket.md --dry-run")
 	return nil

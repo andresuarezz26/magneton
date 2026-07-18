@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/andresuarezz26/magneton/internal/paths"
@@ -130,7 +131,52 @@ func TestDoActionTransitions(t *testing.T) {
 		t.Error("run → run-method picker")
 	}
 	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}, cursor: 2}
-	if mm, _ := m.doAction("stop"); mm.(monitorModel).confirming != "K1" {
+	mm, _ := m.doAction("stop")
+	got := mm.(monitorModel)
+	if got.confirming != "K1" {
 		t.Error("stop → confirming set to the selected ticket")
 	}
+	if got.confirmCursor != 0 {
+		t.Error("stop → confirmCursor reset to 0 (Yes)")
+	}
 }
+
+func TestInjectInteractiveOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	// First call: file absent → creates CLAUDE.md with override block.
+	injectInteractiveOverride(dir)
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "magneton-interactive-override") {
+		t.Error("first call: sentinel not found")
+	}
+	if !strings.Contains(string(data), "interactive session") {
+		t.Error("first call: override text not found")
+	}
+
+	// Second call: idempotent — file must not grow.
+	injectInteractiveOverride(dir)
+	data2, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if len(data2) != len(data) {
+		t.Errorf("second call: content changed (len %d → %d)", len(data), len(data2))
+	}
+
+	// Existing content is preserved.
+	dir2 := t.TempDir()
+	existing := []byte("# My Project\nsome rules here\n")
+	if err := os.WriteFile(filepath.Join(dir2, "CLAUDE.md"), existing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	injectInteractiveOverride(dir2)
+	combined, _ := os.ReadFile(filepath.Join(dir2, "CLAUDE.md"))
+	if !strings.Contains(string(combined), "# My Project") {
+		t.Error("existing content was overwritten")
+	}
+	if !strings.Contains(string(combined), "magneton-interactive-override") {
+		t.Error("override not appended to existing CLAUDE.md")
+	}
+}
+
