@@ -102,6 +102,44 @@ func TestStackEscJiraKeepsChips(t *testing.T) {
 	}
 }
 
+func TestBaseLabel(t *testing.T) {
+	sentinel := git.Branch{Name: defaultBaseSentinel}
+
+	// Default row shows the resolved default branch name + "(default)".
+	m := monitorModel{stackDefault: "main"}
+	if got := m.baseLabel(sentinel); got != "main (default)" {
+		t.Errorf("main default: got %q, want %q", got, "main (default)")
+	}
+	m.stackDefault = "develop"
+	if got := m.baseLabel(sentinel); got != "develop (default)" {
+		t.Errorf("develop default: got %q", got)
+	}
+
+	// Unknown default (couldn't resolve) → a clear fallback, never "none".
+	m.stackDefault = ""
+	if got := m.baseLabel(sentinel); got != "default base" {
+		t.Errorf("empty default: got %q, want %q", got, "default base")
+	}
+
+	// A real branch row renders its own name unchanged.
+	if got := m.baseLabel(git.Branch{Name: "ai/parent"}); got != "ai/parent" {
+		t.Errorf("real branch: got %q", got)
+	}
+}
+
+// Selecting the default row must leave base empty (use the repo default), even
+// though it now displays a real branch name.
+func TestStackEnterDefaultRowKeepsBaseEmpty(t *testing.T) {
+	m := stackModel("jira")
+	m.stackDefault = "main"
+	m.stackCursor = 0 // the default row
+	nm, _ := m.updateRunStack(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if len(hub.runTickets) != 1 || hub.runTickets[0].base != "" {
+		t.Errorf("default row should leave base empty, got %+v", hub.runTickets)
+	}
+}
+
 func TestConfigFieldsRoundTrip(t *testing.T) {
 	in := &config.Config{
 		JiraBaseURL: "https://x.atlassian.net",

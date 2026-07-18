@@ -210,7 +210,7 @@ func (m monitorModel) cancelRunInput() monitorModel {
 	m.view = viewDashboard
 	m.runMode, m.runText, m.runTickets = "", "", nil
 	m.runIDPrompt, m.runImgPrompt, m.runStackPrompt = -1, -1, -1
-	m.stackBranches, m.stackFilter, m.stackCursor = nil, "", 0
+	m.stackBranches, m.stackDefault, m.stackFilter, m.stackCursor = nil, "", "", 0
 	return m
 }
 
@@ -366,6 +366,23 @@ func (m monitorModel) attachImages(i int, s string) monitorModel {
 	return m
 }
 
+// defaultBaseSentinel marks the picker's first row - "use the repo's default
+// base, don't stack". It's rendered as the actual default branch name (via
+// baseLabel); the leading NUL keeps it from ever colliding with a real branch.
+const defaultBaseSentinel = "\x00default"
+
+// baseLabel is the display text for a picker row. The sentinel row shows the
+// repo's default branch (e.g. "main (default)") instead of a cryptic "none".
+func (m monitorModel) baseLabel(b git.Branch) string {
+	if b.Name == defaultBaseSentinel {
+		if m.stackDefault != "" {
+			return m.stackDefault + " (default)"
+		}
+		return "default base"
+	}
+	return b.Name
+}
+
 // openStackPicker loads branch list and enters the stack sub-step for chip i.
 func (m monitorModel) openStackPicker(i int) (tea.Model, tea.Cmd) {
 	repoPath := ""
@@ -374,16 +391,17 @@ func (m monitorModel) openStackPicker(i int) (tea.Model, tea.Cmd) {
 	}
 	branches, _ := git.Branches(repoPath) // best-effort; empty list = picker is empty
 	m.stackBranches = branches
+	m.stackDefault = git.DefaultBranch(repoPath)
 	m.stackFilter = ""
 	m.stackCursor = 0
 	m.runStackPrompt = i
 	return m, nil
 }
 
-// filteredBranches returns the picker list: a sentinel "none" row followed by
+// filteredBranches returns the picker list: the default-base row followed by
 // branches whose name contains the current filter (case-insensitive).
 func (m monitorModel) filteredBranches() []git.Branch {
-	none := git.Branch{Name: "- none (default base) -"}
+	none := git.Branch{Name: defaultBaseSentinel}
 	if m.stackFilter == "" {
 		return append([]git.Branch{none}, m.stackBranches...)
 	}
@@ -409,7 +427,7 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if m.stackCursor < len(list) {
 			b := list[m.stackCursor]
-			if b.Name != "- none (default base) -" {
+			if b.Name != defaultBaseSentinel {
 				m.runTickets[i].base = b.Name
 			}
 		}
@@ -464,7 +482,7 @@ func (m monitorModel) renderRunStack(w int) string {
 	}
 
 	b.WriteString(headerStyle.Render("  Choose the base branch if this ticket depends on another") + "\n")
-	b.WriteString(dimStyle.Render(`  the PR will target this branch - pick "- none -" for the default, esc cancels`) + "\n\n")
+	b.WriteString(dimStyle.Render("  the PR will target this branch - pick the default to not stack, esc cancels") + "\n\n")
 
 	// Search box: the user types to filter the branch list below.
 	b.WriteString(headerStyle.Render("  Search branches") + "\n")
@@ -481,15 +499,16 @@ func (m monitorModel) renderRunStack(w int) string {
 	}
 	for idx := start; idx < len(list) && idx < start+maxShow; idx++ {
 		br := list[idx]
+		name := m.baseLabel(br)
 		tag := ""
 		if br.Remote {
 			tag = dimStyle.Render(" (remote)")
-		} else if br.Name != "- none (default base) -" {
+		} else if br.Name != defaultBaseSentinel {
 			tag = dimStyle.Render(" (local)")
 		}
-		line := "   " + br.Name + tag
+		line := "   " + name + tag
 		if idx == m.stackCursor {
-			line = selStyle.Render(" "+br.Name) + tag
+			line = selStyle.Render(" "+name) + tag
 		}
 		b.WriteString(truncate(line, w) + "\n")
 	}

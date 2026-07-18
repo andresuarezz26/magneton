@@ -224,6 +224,7 @@ type monitorModel struct {
 	runImgPrompt    int             // index of a content chip attaching images; -1 = none
 	runStackPrompt  int             // index of a chip choosing its stack base; -1 = none
 	stackBranches   []git.Branch    // loaded once when the stack picker opens
+	stackDefault    string          // repo's default branch name (main/master/…), for the default row
 	stackFilter     string          // search filter in the stack picker
 	stackCursor     int             // cursor row in the filtered branch list
 	outputTitle     string
