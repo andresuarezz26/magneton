@@ -359,7 +359,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.notice = "open Claude Code: " + msg.err.Error()
 		} else {
-			m.notice = msg.note
+			m.notice = "opened Claude Code in a new window"
 		}
 		return m, nil
 	case tea.KeyMsg:

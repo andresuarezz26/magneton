@@ -98,13 +98,8 @@ func agentActions(s store.Session) []paletteItem {
 	return items
 }
 
-// claudeClosedMsg is returned after launching a Claude Code terminal. note is a
-// human-facing status ("opened … in a new tab/window", plus any hint); err is
-// set only when the launch actually failed.
-type claudeClosedMsg struct {
-	err  error
-	note string
-}
+// claudeClosedMsg is returned after launching a Claude Code terminal.
+type claudeClosedMsg struct{ err error }
 
 // interactiveOverride lifts the headless run's "do not push / do not open a PR"
 // restrictions when the user resumes the session interactively. It is passed via
@@ -115,13 +110,10 @@ const interactiveOverride = "You are now in an interactive session with the user
 	"Any earlier headless-mode restrictions (such as not pushing or not opening a pull request) are lifted. " +
 	"Follow the user's instructions directly, including git push or opening a PR if they ask."
 
-// openClaude opens an interactive Claude Code session in the ticket's worktree
-// in a fresh terminal. iTerm2 gets a new tab (its API supports that directly);
-// Apple Terminal and everything else get a new window - reliably, without
-// needing accessibility permissions. When the session has a stored ID the
-// history is resumed so the user can review what the agent did; an
-// --append-system-prompt override lifts the headless-mode restrictions.
-// The dashboard keeps running.
+// openClaude opens an interactive Claude Code session in the ticket's worktree in
+// a new Terminal window. When the session has a stored ID the history is resumed
+// so the user can review what the agent did; an --append-system-prompt override
+// lifts the headless-mode restrictions. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	worktree := paths.WorktreeFor(s.Repo, s.Ticket)
 	cmdline := "cd " + shellQuote(worktree) + " && claude"
@@ -140,117 +132,32 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	if self, err := os.Executable(); err == nil && stuck {
 		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
 	}
-	// Title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
+	// Window title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
 	title := s.Ticket
 	if s.Branch != "" {
 		title += " · " + s.Branch
 	}
-	termProgram := os.Getenv("TERM_PROGRAM")
-	script := terminalLaunchScript(termProgram, cmdline, title)
+	// `do script` with no target always opens a NEW Terminal window and runs the
+	// command there. Simple and reliable.
+	safeCmd := asEscapeAS(cmdline)
+	safeTitle := asEscapeAS(title)
+	script := "tell application \"Terminal\"\n" +
+		"\tactivate\n" +
+		"\tset t to do script \"" + safeCmd + "\"\n" +
+		"\ttry\n" +
+		"\t\tset custom title of t to \"" + safeTitle + "\"\n" +
+		"\tend try\n" +
+		"end tell"
 	return func() tea.Msg {
 		// Run (not Start) so an AppleScript failure actually surfaces instead of
-		// silently "succeeding". osascript returns as soon as the window/tab is
-		// open; it does not wait for the claude session.
+		// silently "succeeding". osascript returns as soon as the window is open;
+		// it does not wait for the claude session.
 		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 		if err != nil {
 			return claudeClosedMsg{err: fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))}
 		}
-		note := "opened Claude Code in a new terminal"
-		switch strings.TrimSpace(string(out)) {
-		case "tab":
-			note = "opened Claude Code in a new tab"
-		case "window":
-			note = "opened Claude Code in a new window"
-			// On Apple Terminal, tabs need Accessibility permission. Prompt the user
-			// once (clear message + jump to the right Settings pane), and keep a
-			// standing hint in the notice for subsequent opens.
-			if termProgram == "Apple_Terminal" {
-				note = "opened in a new window · grant Terminal Accessibility permission (System Settings ▸ Privacy) for tabs"
-				maybePromptTabPermission()
-			}
-		}
-		return claudeClosedMsg{note: note}
+		return claudeClosedMsg{}
 	}
-}
-
-// accessibilityPromptScript explains (in the user's words) why the permission is
-// needed - to open Claude Code in a new tab - and opens the Accessibility pane of
-// System Settings when the user agrees.
-const accessibilityPromptScript = `set msg to "To open Claude Code in a new tab (instead of a separate window), macOS needs to let Terminal control keystrokes - the Accessibility permission.
-
-Turn ON Terminal under Accessibility, then use \"Open in Claude Code\" again."
-display dialog msg buttons {"Later", "Open Settings"} default button "Open Settings" with title "magneton · open Claude Code in tabs" with icon note
-if button returned of result is "Open Settings" then
-	do shell script "open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility\""
-end if`
-
-// maybePromptTabPermission shows the Accessibility guidance dialog at most once
-// per install (guarded by a marker file), so it informs without nagging.
-func maybePromptTabPermission() {
-	marker := filepath.Join(paths.Root(), ".tab-permission-prompted")
-	if _, err := os.Stat(marker); err == nil {
-		return // already shown
-	}
-	_ = exec.Command("osascript", "-e", accessibilityPromptScript).Run()
-	_ = os.WriteFile(marker, []byte("1\n"), 0o644)
-}
-
-// terminalLaunchScript builds the AppleScript that opens cmdline in a new
-// terminal session. iTerm2 gets a new tab via its native API (no accessibility
-// permission required); every other terminal - Apple Terminal and anything we
-// don't special-case - gets a new Terminal.app window via `do script`, which
-// always works. termProgram is the $TERM_PROGRAM of the running terminal.
-func terminalLaunchScript(termProgram, cmdline, title string) string {
-	cmd := asEscapeAS(cmdline)
-	t := asEscapeAS(title)
-	if termProgram == "iTerm.app" {
-		return "tell application \"iTerm\"\n" +
-			"\tactivate\n" +
-			"\tif (count of windows) = 0 then\n" +
-			"\t\tcreate window with default profile\n" +
-			"\telse\n" +
-			"\t\ttell current window to create tab with default profile\n" +
-			"\tend if\n" +
-			"\ttell current session of current window\n" +
-			"\t\twrite text \"" + cmd + "\"\n" +
-			"\t\ttry\n" +
-			"\t\t\tset name to \"" + t + "\"\n" +
-			"\t\tend try\n" +
-			"\tend tell\n" +
-			"end tell\n" +
-			"return \"tab\""
-	}
-	// Apple Terminal has no scripting command to make a tab, so we simulate Cmd+T
-	// via System Events. That needs Accessibility permission; when it's missing
-	// the keystroke is a no-op, so we compare the front window's tab count before
-	// and after and only run "in front window" (the new tab) if one actually
-	// appeared - otherwise we open a NEW window with a plain `do script`, which
-	// always works. This is bulletproof: no permission → a window, never a
-	// command injected into magneton's own tab.
-	return "tell application \"Terminal\" to activate\n" +
-		"set tabsBefore to -1\n" +
-		"tell application \"Terminal\"\n" +
-		"\tif (count of windows) > 0 then set tabsBefore to (count of tabs of front window)\n" +
-		"end tell\n" +
-		"try\n" +
-		"\ttell application \"System Events\" to keystroke \"t\" using command down\n" +
-		"end try\n" +
-		"delay 0.3\n" +
-		"set outcome to \"window\"\n" +
-		"tell application \"Terminal\"\n" +
-		"\tset madeTab to false\n" +
-		"\tif tabsBefore >= 0 and (count of tabs of front window) > tabsBefore then set madeTab to true\n" +
-		"\tif madeTab then\n" +
-		"\t\tset t to do script \"" + cmd + "\" in front window\n" +
-		"\t\tset outcome to \"tab\"\n" +
-		"\telse\n" +
-		"\t\tset t to do script \"" + cmd + "\"\n" +
-		"\tend if\n" +
-		"\ttry\n" +
-		"\t\tset custom title of t to \"" + t + "\"\n" +
-		"\tend try\n" +
-		"end tell\n" +
-		"return outcome"
 }
 
 // asEscapeAS escapes a string for embedding inside an AppleScript double-quoted literal.
