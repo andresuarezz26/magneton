@@ -710,6 +710,9 @@ var (
 	headerStyle = lipgloss.NewStyle().Bold(true)
 	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
+	// hintStyle accents the "↵ actions" affordance on the selected row. Same
+	// background as selStyle so the row highlight stays continuous under it.
+	hintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Background(lipgloss.Color("236")).Bold(true)
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
@@ -815,11 +818,7 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		b.WriteString(g.style.Render(fmt.Sprintf("▾ %s (%d)", g.label, len(g.sessions))) + "\n")
 		listLines++
 		for _, s := range g.sessions {
-			row := m.renderRow(s, w)
-			if idx == m.cursor {
-				row = selStyle.Render(row)
-			}
-			b.WriteString(row + "\n")
+			b.WriteString(m.renderRow(s, w, idx == m.cursor) + "\n")
 			idx++
 			listLines++
 		}
@@ -1001,7 +1000,7 @@ func failReason(ticket string) string {
 	return "see log below"
 }
 
-func (m monitorModel) renderRow(s store.Session, w int) string {
+func (m monitorModel) renderRow(s store.Session, w int, selected bool) string {
 	// ShortDesc (LLM-generated <10-word gist) → Summary → latest log line.
 	desc := s.ShortDesc
 	if desc == "" {
@@ -1016,11 +1015,24 @@ func (m monitorModel) renderRow(s store.Session, w int) string {
 	}
 	left := fmt.Sprintf("  %s %-9s %-11s", glyphFor(s), s.Ticket, stateLabel(s)+retries)
 	right := fmt.Sprintf(" %4s", age(s.UpdatedAt))
-	flex := w - lipgloss.Width(left) - lipgloss.Width(right) - 1
+
+	// The selected row carries an inline "↵ actions" affordance so it's obvious
+	// pressing enter opens the actions menu.
+	hint := ""
+	if selected {
+		hint = "  ↵ actions "
+	}
+	flex := w - lipgloss.Width(left) - lipgloss.Width(right) - lipgloss.Width(hint) - 1
 	if flex < 6 {
 		flex = 6
 	}
-	return left + fmt.Sprintf(" %-*s", flex, truncate(desc, flex)) + right
+	mid := fmt.Sprintf(" %-*s", flex, truncate(desc, flex))
+	if !selected {
+		return left + mid + right
+	}
+	// Compose the highlight across the whole line, accenting only the hint. All
+	// three segments share selStyle's background so the highlight stays solid.
+	return selStyle.Render(left+mid) + hintStyle.Render(hint) + selStyle.Render(right)
 }
 
 // ---- helpers ---------------------------------------------------------------

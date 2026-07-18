@@ -415,7 +415,7 @@ func TestRenderRowDescPreference(t *testing.T) {
 		ShortDesc: "upload paper to storage",
 		UpdatedAt: time.Now(),
 	}
-	row1 := m.renderRow(s1, w)
+	row1 := m.renderRow(s1, w, false)
 	if !strings.Contains(row1, "upload paper to storage") {
 		t.Errorf("ShortDesc should appear in row: %q", row1)
 	}
@@ -431,9 +431,24 @@ func TestRenderRowDescPreference(t *testing.T) {
 		ShortDesc: "",
 		UpdatedAt: time.Now(),
 	}
-	row2 := m.renderRow(s2, w)
+	row2 := m.renderRow(s2, w, false)
 	if !strings.Contains(row2, "Fix login crash") {
 		t.Errorf("Summary should appear when ShortDesc is empty: %q", row2)
+	}
+}
+
+// The selected row shows an inline "↵ actions" affordance; unselected rows don't.
+func TestRenderRowSelectedHint(t *testing.T) {
+	m := monitorModel{}
+	s := store.Session{Ticket: "K-1", State: "working", ShortDesc: "do a thing", UpdatedAt: time.Now()}
+
+	sel := m.renderRow(s, 80, true)
+	if !strings.Contains(sel, "↵ actions") {
+		t.Errorf("selected row should show the ↵ actions hint: %q", sel)
+	}
+	unsel := m.renderRow(s, 80, false)
+	if strings.Contains(unsel, "↵ actions") {
+		t.Errorf("unselected row must not show the hint: %q", unsel)
 	}
 }
 
