@@ -11,7 +11,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/andresuarezz26/magneton/internal/config"
-	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 	"github.com/andresuarezz26/magneton/internal/vcs"
@@ -105,12 +104,10 @@ func wizard() error {
 		}
 	}
 
-	// Branch pattern: default uses the developer's GitHub username.
-	username := git.ResolveUsername()
-	defaultBranch := username + "/{ticket}-{slug}"
+	// Branch pattern: {username} resolves to the git/GitHub user at run time.
 	fmt.Println("\n  Branch names use variables: {username}, {ticket}, {slug} (title as kebab-case).")
-	fmt.Printf("  Example: for TICKET-1 \"Add pull to refresh\" → %s/ticket-1-add-pull-to-refresh\n", username)
-	branchPattern := ask(r, "Branch pattern", defaultBranch)
+	fmt.Println("  Example: for TICKET-1 \"Add pull to refresh\" → currentusername/ticket-1-add-pull-to-refresh")
+	branchPattern := ask(r, "Branch pattern", "{username}/{ticket}-{slug}")
 
 	repo := config.Repo{Path: repoPath, Branch: branchPattern}
 	cfg.Repos = []config.Repo{repo}
