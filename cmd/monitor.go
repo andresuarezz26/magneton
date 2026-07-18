@@ -200,11 +200,14 @@ type monitorModel struct {
 	lastRefresh time.Time
 	err         error
 
-	// answer-and-resume mode
-	answering bool
-	input     string
-	answerKey string
-	notice    string // transient status/error line under the footer
+	// answer-and-resume mode. The answer is an ordered list of atoms - typed
+	// runes and pasted blobs interleaved - so a paste shows inline as
+	// "[N lines added]" right where the cursor was, exactly like Claude Code.
+	answering    bool
+	answerKey    string
+	answerAtoms  []inputAtom // typed chars + paste placeholders, in order
+	answerCursor int         // index into answerAtoms (0..len)
+	notice       string      // transient status/error line under the footer
 
 	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
 	confirming string
@@ -489,29 +492,100 @@ func (m monitorModel) cancelAgent(s store.Session) tea.Cmd {
 	}
 }
 
+// pasteInlineMaxRunes is the cutoff below which a single-line paste is dropped
+// in as literal typed text instead of a collapsed "[1 line added]" chip.
+const pasteInlineMaxRunes = 100
+
+// inputAtom is one unit of the answer input. A typed character carries a rune;
+// a paste carries its whole body in blob (and r is zero). Each atom is a single
+// cursor stop, so backspace over a paste removes the entire "[N lines added]"
+// chunk at once - matching Claude Code's paste-as-one-token behaviour.
+type inputAtom struct {
+	r    rune   // typed character (when blob == "")
+	blob string // pasted body (when non-empty)
+}
+
+// answerText reassembles the atoms into the string sent to the agent: typed
+// runes verbatim, pastes expanded to their full body in place.
+func answerText(atoms []inputAtom) string {
+	var b strings.Builder
+	for _, a := range atoms {
+		if a.blob != "" {
+			b.WriteString(a.blob)
+		} else {
+			b.WriteRune(a.r)
+		}
+	}
+	return b.String()
+}
+
+// insertAtom inserts one atom at the cursor and returns the advanced cursor.
+func insertAtom(atoms []inputAtom, cursor int, a inputAtom) ([]inputAtom, int) {
+	out := make([]inputAtom, 0, len(atoms)+1)
+	out = append(out, atoms[:cursor]...)
+	out = append(out, a)
+	out = append(out, atoms[cursor:]...)
+	return out, cursor + 1
+}
+
 // updateAnswering handles keystrokes while the answer input box is open.
 func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Bracketed paste arrives as a KeyMsg with Paste=true regardless of Type.
+	// Drop it in as a single atom at the cursor - it renders inline as
+	// "[N lines added]" and stays one deletable unit.
+	if msg.Paste {
+		blob := normalizeNewlines(string(msg.Runes))
+		if blob == "" {
+			return m, nil
+		}
+		// A short single-line paste (a URL, an identifier, a phrase) reads better
+		// dropped in as literal text than hidden behind an "[1 line added]" chip.
+		// Anything multi-line or long stays a collapsed paste atom.
+		if oneLine := strings.TrimRight(blob, "\n"); !strings.Contains(oneLine, "\n") && len([]rune(oneLine)) <= pasteInlineMaxRunes {
+			for _, ch := range oneLine {
+				m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ch})
+			}
+		} else {
+			m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{blob: blob})
+		}
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyEnter:
-		if strings.TrimSpace(m.input) == "" {
+		full := strings.TrimSpace(answerText(m.answerAtoms))
+		if full == "" {
 			m.answering = false
 			return m, nil
 		}
-		key, answer := m.answerKey, m.input
+		key := m.answerKey
 		m.answering = false
+		m.answerAtoms = nil
+		m.answerCursor = 0
 		m.notice = "sending answer to " + key + "…"
-		return m, m.submitAnswer(key, answer)
+		return m, m.submitAnswer(key, full)
 	case tea.KeyEsc:
 		m.answering = false
-		m.input = ""
+		m.answerAtoms = nil
+		m.answerCursor = 0
+	case tea.KeyLeft:
+		if m.answerCursor > 0 {
+			m.answerCursor--
+		}
+	case tea.KeyRight:
+		if m.answerCursor < len(m.answerAtoms) {
+			m.answerCursor++
+		}
 	case tea.KeyBackspace:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
+		if m.answerCursor > 0 {
+			m.answerAtoms = append(m.answerAtoms[:m.answerCursor-1], m.answerAtoms[m.answerCursor:]...)
+			m.answerCursor--
 		}
 	case tea.KeySpace:
-		m.input += " "
+		m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ' '})
 	case tea.KeyRunes:
-		m.input += string(msg.Runes)
+		for _, ch := range msg.Runes {
+			m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ch})
+		}
 	default:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -739,7 +813,38 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		}
 		if m.answering {
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
-			b.WriteString("  › " + m.input + "▌")
+			// Walk the atoms into a single display line: typed runes verbatim,
+			// each paste shown inline as "[N lines added]", and "▌" where the
+			// cursor sits. Then word-wrap so long answers stay visible.
+			var line strings.Builder
+			for i, a := range m.answerAtoms {
+				if i == m.answerCursor {
+					line.WriteString("▌")
+				}
+				if a.blob != "" {
+					n := lineCount(a.blob)
+					line.WriteString(fmt.Sprintf("[%d line%s added]", n, plural(n)))
+				} else {
+					line.WriteRune(a.r)
+				}
+			}
+			if m.answerCursor >= len(m.answerAtoms) {
+				line.WriteString("▌")
+			}
+			const prefix = "  › "
+			const cont = "    "
+			segs := wrapLine(line.String(), w-len([]rune(prefix)))
+			if len(segs) == 0 {
+				b.WriteString(prefix + "\n")
+			} else {
+				for i, seg := range segs {
+					if i == 0 {
+						b.WriteString(prefix + seg + "\n")
+					} else {
+						b.WriteString(cont + seg + "\n")
+					}
+				}
+			}
 		} else {
 			whyRowCount := 0
 			for _, ln := range whyLines(*sel) {
@@ -860,9 +965,11 @@ func failReason(ticket string) string {
 }
 
 func (m monitorModel) renderRow(s store.Session, w int) string {
-	// Show the ticket title so each row says what work it is, at a glance.
-	// Fall back to the latest log line only if there's no title.
-	desc := s.Summary
+	// ShortDesc (LLM-generated <10-word gist) → Summary → latest log line.
+	desc := s.ShortDesc
+	if desc == "" {
+		desc = s.Summary
+	}
 	if desc == "" {
 		desc = cleanActivity(tailLines(paths.LogFor(s.Ticket), 1), s.Ticket)
 	}

@@ -100,9 +100,9 @@ func agentActions(s store.Session) []paletteItem {
 // claudeClosedMsg is returned after launching a Claude Code terminal.
 type claudeClosedMsg struct{ err error }
 
-// openClaude opens a NEW terminal window running an interactive Claude Code
-// session in the ticket's worktree, resuming the agent's stored session when
-// there is one. The dashboard keeps running.
+// openClaude opens a new terminal TAB (not a window) running an interactive
+// Claude Code session in the ticket's worktree, resuming the agent's stored
+// session when there is one. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Repo, s.Ticket)) + " && claude"
 	if s.SessionID != "" {
@@ -123,10 +123,35 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	if self, err := os.Executable(); err == nil && stuck {
 		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
 	}
-	script := "tell application \"Terminal\"\n\tdo script \"" + cmdline + "\"\n\tactivate\nend tell"
+	// Tab title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
+	tabTitle := s.Ticket
+	if s.Branch != "" {
+		tabTitle += " · " + s.Branch
+	}
+	// Open in a new TAB of the front Terminal window so the dashboard and all
+	// agents share one window instead of spawning terminal hell.
+	// Fall back to a new window when Terminal has no open windows.
+	safeCmd := asEscapeAS(cmdline)
+	safeTitle := asEscapeAS(tabTitle)
+	script := "tell application \"Terminal\"\n" +
+		"\tactivate\n" +
+		"\tif (count of windows) > 0 then\n" +
+		"\t\tset t to do script \"" + safeCmd + "\" in front window\n" +
+		"\telse\n" +
+		"\t\tset t to do script \"" + safeCmd + "\"\n" +
+		"\tend if\n" +
+		"\tset custom title of t to \"" + safeTitle + "\"\n" +
+		"end tell"
 	return func() tea.Msg {
 		return claudeClosedMsg{err: exec.Command("osascript", "-e", script).Start()}
 	}
+}
+
+// asEscapeAS escapes a string for embedding inside an AppleScript double-quoted literal.
+func asEscapeAS(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }
 
 // doAction runs an action by id. The Enter menu and the keyboard shortcuts both
@@ -137,8 +162,9 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "answer":
 		if s := m.selected(); s != nil && s.State == "awaiting-answer" {
 			m.answering = true
-			m.input = ""
 			m.answerKey = s.Ticket
+			m.answerAtoms = nil
+			m.answerCursor = 0
 			m.notice = ""
 		}
 	case "studio":

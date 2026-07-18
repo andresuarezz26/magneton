@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/config"
 	"github.com/andresuarezz26/magneton/internal/jira"
 	"github.com/andresuarezz26/magneton/internal/paths"
@@ -222,6 +223,28 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	// (failed/needs-you/stopped/review) right away instead of lingering there
 	// until the pipeline reaches planning (after the slow worktree setup).
 	_ = st.SetState(sp.ticket, store.StateQueued, 0)
+
+	// Short description for the dashboard third column — set immediately with a
+	// programmatic fallback so the column is never empty, then upgraded async by an
+	// LLM call so noisy or verbose summaries get normalised to <10 words.
+	progDesc := truncateWords(firstNonEmpty(summary, firstSentence(desc), sp.ticket), 10)
+	_ = st.SetShortDesc(sp.ticket, progDesc)
+	go func() {
+		apiKey := secrets.Get(secrets.Anthropic)
+		descSnip := desc
+		if len(descSnip) > 1000 {
+			descSnip = descSnip[:1000]
+		}
+		prompt := fmt.Sprintf(
+			"In at most 9 words, plain text, no quotes or period, describe what this ticket asks for. Title: %s. Description: %s",
+			summary, descSnip)
+		if out := agent.Oneshot(prompt, apiKey); out != "" {
+			llmDesc := truncateWords(strings.TrimRight(out, "."), 10)
+			if llmDesc != "" {
+				_ = st.SetShortDesc(sp.ticket, llmDesc)
+			}
+		}
+	}()
 
 	hooks := runner.Hooks{
 		Logf:    logf,

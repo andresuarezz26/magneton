@@ -391,6 +391,13 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	if report != nil && strings.TrimSpace(report.PRBody) != "" {
 		body = report.PRBody
 		logf("[%s] PR body from repo template", t.Ticket)
+		// Completeness repair: restore any sections the LLM dropped.
+		if tmpl := vcs.ReadRepoTemplate(worktree); tmpl != "" {
+			if missing := vcs.MissingSections(tmpl, body); len(missing) > 0 {
+				logf("[%s] PR body was missing %d template section(s) - restored from template", t.Ticket, len(missing))
+				body = vcs.RepairSections(tmpl, body, missing)
+			}
+		}
 	} else {
 		b, err := vcs.RenderPRBody(pr)
 		if err != nil {

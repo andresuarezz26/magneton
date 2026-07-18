@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -46,10 +47,11 @@ Ticket: {{.Ticket}} · Branch: {{.Branch}}
 {{.Summary}}
 
 ## Changes
-{{range .FilesChanged}}- {{.}}
+{{if .FilesChanged}}{{range .FilesChanged}}- {{.}}
+{{end}}{{else}}- (not reported)
 {{end}}
 ## Checks
-{{.Tests}}
+{{if .Tests}}{{.Tests}}{{else}}(not reported){{end}}
 
 🤖 Generated autonomously by magneton · review before merge
 `
@@ -169,6 +171,72 @@ func PRState(repoDir, prURL string) (string, error) {
 		return "", fmt.Errorf("gh pr view: %w\n%s", err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+
+// ReadRepoTemplate returns the content of the first PR template found in the
+// worktree (.github/PULL_REQUEST_TEMPLATE.md etc.), or "" when none exists.
+func ReadRepoTemplate(worktreeDir string) string {
+	for _, rel := range []string{
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".github/pull_request_template.md",
+		"docs/PULL_REQUEST_TEMPLATE.md",
+	} {
+		if b, err := os.ReadFile(filepath.Join(worktreeDir, rel)); err == nil {
+			return string(b)
+		}
+	}
+	return ""
+}
+
+// MissingSections returns the heading text of every section in tmpl whose
+// heading does not appear in body (case-insensitive). Checklist lines are not
+// examined — only the headings themselves are compared.
+func MissingSections(tmpl, body string) []string {
+	bodyLower := strings.ToLower(body)
+	var missing []string
+	for _, m := range headingRe.FindAllStringSubmatch(tmpl, -1) {
+		heading := strings.TrimSpace(m[1])
+		if !strings.Contains(bodyLower, strings.ToLower(heading)) {
+			missing = append(missing, heading)
+		}
+	}
+	return missing
+}
+
+// RepairSections appends the verbatim template content for each of the
+// missingSections to body. Only the template's own wording is restored — no
+// invented text is added.
+func RepairSections(tmpl, body string, missingSections []string) string {
+	if len(missingSections) == 0 {
+		return body
+	}
+	missing := make(map[string]bool, len(missingSections))
+	for _, s := range missingSections {
+		missing[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+
+	// Locate every heading's start position in the template.
+	type sectionSpan struct{ start, end int; heading string }
+	allIdx := headingRe.FindAllStringSubmatchIndex(tmpl, -1)
+	secs := make([]sectionSpan, 0, len(allIdx))
+	for _, idx := range allIdx {
+		heading := strings.TrimSpace(tmpl[idx[2]:idx[3]])
+		secs = append(secs, sectionSpan{start: idx[0], end: len(tmpl), heading: heading})
+		if len(secs) > 1 {
+			secs[len(secs)-2].end = idx[0]
+		}
+	}
+
+	var appended strings.Builder
+	for _, sec := range secs {
+		if missing[strings.ToLower(sec.heading)] {
+			appended.WriteString("\n\n")
+			appended.WriteString(strings.TrimRight(tmpl[sec.start:sec.end], "\n"))
+		}
+	}
+	return body + appended.String()
 }
 
 // WriteDefaultTemplates drops the default templates if they don't exist yet.

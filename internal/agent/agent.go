@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Report is the .agent/report.json the session must write as its last step.
@@ -347,7 +349,7 @@ Rules:
 - Follow the approved plan and steps above. Make the focused, minimal change described.
 - This is an Android/Gradle project. A later verification step will build the project and run its tests - write code that compiles and passes.
 - Do NOT git push and do NOT open a pull request - the orchestrator handles commit, push, and PR.
-- PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change - keep its headings and checklist, replace placeholders with real content, and tick the boxes that genuinely apply - and put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
+- PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change: EVERY heading, section, and checklist item MUST appear in prBody, in the same order. Never drop a section - fill each one with real content about THIS change. Keep every checklist item exactly as written: tick the boxes that apply, leave the rest unticked. Do not add sections, filler text, or commentary not in the template. Put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
 - Your FINAL action MUST be to write .agent/report.json (create the .agent directory if needed):
 {
   "status": "ready_for_build" | "needs_human",
@@ -453,6 +455,33 @@ Rules:
 }
 Use "needs_human" if the ticket is ambiguous, out of scope, or you cannot make a safe change; otherwise "ready_for_build".`,
 		ticketKey, summary, desc, compileCmd, testCmd)
+}
+
+// Oneshot runs `claude -p <prompt>` with a 30 s timeout and returns the first
+// non-blank output line. It uses the haiku model for speed and low cost.
+// Returns "" on any error — callers keep their programmatic fallback.
+func Oneshot(prompt, anthropicKey string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude",
+		"-p", prompt,
+		"--model", "claude-haiku-4-5-20251001",
+		"--output-format", "text",
+	)
+	cmd.Env = os.Environ()
+	if anthropicKey != "" {
+		cmd.Env = append(cmd.Env, "ANTHROPIC_API_KEY="+anthropicKey)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // BuildRetryPrompt feeds a failed gate back into the same session (Decision 4).

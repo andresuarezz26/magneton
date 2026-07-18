@@ -226,6 +226,36 @@ func truncateTitle(s string) string {
 	return strings.TrimSpace(cut) + "…"
 }
 
+// truncateWords returns s truncated to at most n words (space-joined).
+// Unicode-safe; each whitespace run counts as a word boundary.
+func truncateWords(s string, n int) string {
+	words := strings.Fields(s)
+	if len(words) <= n {
+		return s
+	}
+	return strings.Join(words[:n], " ")
+}
+
+// firstSentence returns the text up to (but not including) the first period or
+// newline, trimmed. Returns the whole string when neither is found.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, ".\n"); i > 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// firstNonEmpty returns the first argument whose trimmed value is non-empty.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // ticketIDFromPath turns a/b/ticket_1.md into "TICKET-1": strip dir + extension,
 // uppercase, collapse every run of non-[A-Z0-9] into a single '-', trim '-'.
 // Falls back to "LOCAL" if nothing usable remains. The result is safe to feed
