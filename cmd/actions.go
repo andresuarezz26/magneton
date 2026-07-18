@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,9 +110,11 @@ const interactiveOverride = "You are now in an interactive session with the user
 	"Any earlier headless-mode restrictions (such as not pushing or not opening a pull request) are lifted. " +
 	"Follow the user's instructions directly, including git push or opening a PR if they ask."
 
-// openClaude opens a new terminal TAB (not a window) running an interactive
-// Claude Code session in the ticket's worktree. When the session has a stored
-// ID the history is resumed so the user can review what the agent did; an
+// openClaude opens an interactive Claude Code session in the ticket's worktree
+// in a fresh terminal. iTerm2 gets a new tab (its API supports that directly);
+// Apple Terminal and everything else get a new window - reliably, without
+// needing accessibility permissions. When the session has a stored ID the
+// history is resumed so the user can review what the agent did; an
 // --append-system-prompt override lifts the headless-mode restrictions.
 // The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
@@ -132,33 +135,57 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	if self, err := os.Executable(); err == nil && stuck {
 		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
 	}
-	// Tab title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
-	tabTitle := s.Ticket
+	// Title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
+	title := s.Ticket
 	if s.Branch != "" {
-		tabTitle += " · " + s.Branch
+		title += " · " + s.Branch
 	}
-	// Open in a new TAB of the front Terminal window so the dashboard and all
-	// agents share one window instead of spawning terminal hell.
-	// Fall back to a new window when Terminal has no open windows.
-	safeCmd := asEscapeAS(cmdline)
-	safeTitle := asEscapeAS(tabTitle)
-	// "do script" without "in front window" returns a process object, not a tab
-	// object, so "set custom title" would fail and abort the whole script.
-	// Wrapping in try/end try lets the window open even when title-setting fails.
-	script := "tell application \"Terminal\"\n" +
+	script := terminalLaunchScript(os.Getenv("TERM_PROGRAM"), cmdline, title)
+	return func() tea.Msg {
+		// Run (not Start) so an AppleScript failure actually surfaces instead of
+		// silently "succeeding". osascript returns as soon as the window/tab is
+		// open; it does not wait for the claude session.
+		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+		if err != nil {
+			return claudeClosedMsg{err: fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))}
+		}
+		return claudeClosedMsg{}
+	}
+}
+
+// terminalLaunchScript builds the AppleScript that opens cmdline in a new
+// terminal session. iTerm2 gets a new tab via its native API (no accessibility
+// permission required); every other terminal - Apple Terminal and anything we
+// don't special-case - gets a new Terminal.app window via `do script`, which
+// always works. termProgram is the $TERM_PROGRAM of the running terminal.
+func terminalLaunchScript(termProgram, cmdline, title string) string {
+	cmd := asEscapeAS(cmdline)
+	t := asEscapeAS(title)
+	if termProgram == "iTerm.app" {
+		return "tell application \"iTerm\"\n" +
+			"\tactivate\n" +
+			"\tif (count of windows) = 0 then\n" +
+			"\t\tcreate window with default profile\n" +
+			"\telse\n" +
+			"\t\ttell current window to create tab with default profile\n" +
+			"\tend if\n" +
+			"\ttell current session of current window\n" +
+			"\t\twrite text \"" + cmd + "\"\n" +
+			"\t\ttry\n" +
+			"\t\t\tset name to \"" + t + "\"\n" +
+			"\t\tend try\n" +
+			"\tend tell\n" +
+			"end tell"
+	}
+	// Apple Terminal and fallback: `do script` with no target always opens a
+	// NEW window and runs the command there.
+	return "tell application \"Terminal\"\n" +
 		"\tactivate\n" +
-		"\tif (count of windows) > 0 then\n" +
-		"\t\tset t to do script \"" + safeCmd + "\" in front window\n" +
-		"\telse\n" +
-		"\t\tset t to do script \"" + safeCmd + "\"\n" +
-		"\tend if\n" +
+		"\tset t to do script \"" + cmd + "\"\n" +
 		"\ttry\n" +
-		"\t\tset custom title of t to \"" + safeTitle + "\"\n" +
+		"\t\tset custom title of t to \"" + t + "\"\n" +
 		"\tend try\n" +
 		"end tell"
-	return func() tea.Msg {
-		return claudeClosedMsg{err: exec.Command("osascript", "-e", script).Start()}
-	}
 }
 
 // asEscapeAS escapes a string for embedding inside an AppleScript double-quoted literal.

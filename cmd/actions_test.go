@@ -166,3 +166,45 @@ func TestOpenClaudeInteractiveOverride(t *testing.T) {
 	}
 }
 
+func TestTerminalLaunchScript(t *testing.T) {
+	cmd := "cd '/x' && claude"
+	title := "TICKET-1 · ai/branch"
+
+	// Apple Terminal (and any unknown terminal) → a NEW window via `do script`.
+	// Crucially it must NOT use `in front window`, which injects into the tab
+	// already running magneton.
+	for _, tp := range []string{"Apple_Terminal", "", "vscode", "ghostty", "WezTerm"} {
+		got := terminalLaunchScript(tp, cmd, title)
+		if !strings.Contains(got, `application "Terminal"`) {
+			t.Errorf("%q: expected Terminal.app target:\n%s", tp, got)
+		}
+		if !strings.Contains(got, "do script") {
+			t.Errorf("%q: expected `do script`:\n%s", tp, got)
+		}
+		if strings.Contains(got, "in front window") {
+			t.Errorf("%q: must NOT target the front window (that hijacks magneton's tab):\n%s", tp, got)
+		}
+		if !strings.Contains(got, "cd '/x' && claude") {
+			t.Errorf("%q: command not embedded:\n%s", tp, got)
+		}
+		if !strings.Contains(got, "set custom title") {
+			t.Errorf("%q: title not set:\n%s", tp, got)
+		}
+	}
+
+	// iTerm2 → a new tab via its native API (no System Events / accessibility).
+	iterm := terminalLaunchScript("iTerm.app", cmd, title)
+	if !strings.Contains(iterm, `application "iTerm"`) {
+		t.Errorf("iTerm: expected iTerm target:\n%s", iterm)
+	}
+	if !strings.Contains(iterm, "create tab with default profile") {
+		t.Errorf("iTerm: expected a new tab:\n%s", iterm)
+	}
+	if !strings.Contains(iterm, "write text") || !strings.Contains(iterm, "cd '/x' && claude") {
+		t.Errorf("iTerm: command not run via write text:\n%s", iterm)
+	}
+	if strings.Contains(iterm, "System Events") {
+		t.Errorf("iTerm: must not need System Events keystrokes:\n%s", iterm)
+	}
+}
+
