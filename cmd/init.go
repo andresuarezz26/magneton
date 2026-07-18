@@ -43,7 +43,7 @@ max_budget_usd = 5
 
 [[repo]]
 path        = "~/src/android-app"
-branch      = "{username}/{ticket}-{slug}"
+branch      = "{ticket}-{slug}"
 # base      = "main"
 # Build/test commands are intentionally not configured: the agent discovers and
 # runs verification itself (handles per-project setups and company build skills).
@@ -96,19 +96,24 @@ func wizard() error {
 	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 
-	// Required: repo path.
-	fmt.Println("\n  Tip: cd to your Android project in Terminal, then run: pwd")
-	repoPath := ask(r, "Repository path", "~/src/android-app")
+	// Required: repo path. Pre-fill with the current directory (where the user
+	// most likely ran `magneton init` from), editable in place.
+	pwd, _ := os.Getwd()
+	if pwd == "" {
+		pwd = "~/src/android-app"
+	}
+	fmt.Println("\n  Repository path — the Android project magneton works on.")
+	fmt.Println("  Pre-filled with this directory; edit it if your project lives elsewhere.")
+	repoPath := ask(r, "Repository path", pwd)
 	if expanded := config.Expand(repoPath); expanded != "" {
 		if _, err := os.Stat(expanded); os.IsNotExist(err) {
 			fmt.Println("  (warn) that path doesn't exist yet — update it in", paths.Config(), "before running magneton")
 		}
 	}
 
-	// Branch pattern: {username} resolves to the git/GitHub user at run time.
-	fmt.Println("\n  Branch names use variables: {username}, {ticket}, {slug} (title as kebab-case).")
-	fmt.Println("  Example: for TICKET-1 \"Add pull to refresh\" → currentusername/ticket-1-add-pull-to-refresh")
-	branchPattern := ask(r, "Branch pattern", "{username}/{ticket}-{slug}")
+	// Branch pattern, pre-filled with the default so the user can accept or tweak.
+	printBranchHelp()
+	branchPattern := ask(r, "Branch pattern (press Enter for default)", "{ticket}-{slug}")
 
 	repo := config.Repo{Path: repoPath, Branch: branchPattern}
 	cfg.Repos = []config.Repo{repo}
@@ -168,12 +173,28 @@ func checkGitRemote(repoPath string) error {
 	return nil
 }
 
+// printBranchHelp explains the branch-naming placeholders and shows a few
+// worked examples before the wizard asks for the pattern.
+func printBranchHelp() {
+	fmt.Println("\n  Branch naming pattern")
+	fmt.Println("  Build your team's pattern using these placeholders:")
+	fmt.Println()
+	fmt.Println("    {ticket}   Ticket ID, lowercase       e.g. ticket-1")
+	fmt.Println("    {slug}     Ticket title, kebab-case   e.g. add-pull-to-refresh")
+	fmt.Println()
+	fmt.Println("  Examples for TICKET-1 — \"Add pull to refresh\":")
+	fmt.Println()
+	fmt.Println("    {ticket}-{slug}     ticket-1-add-pull-to-refresh")
+	fmt.Println("    feature/{ticket}    feature/ticket-1")
+	fmt.Println("    {ticket}/{slug}     ticket-1/add-pull-to-refresh")
+	fmt.Println()
+}
+
+// ask prompts for a value, pre-filling the field with def so the user can edit
+// it in place (arrow keys work) rather than retype it. Submitting an empty line
+// still falls back to def.
 func ask(r *bufio.Reader, label, def string) string {
-	prompt := "? " + label + ": "
-	if def != "" {
-		prompt = "? " + label + " [" + def + "]: "
-	}
-	line := readLine(r, prompt)
+	line := readLine(r, "? "+label+": ", def)
 	if line == "" {
 		return def
 	}
@@ -181,11 +202,12 @@ func ask(r *bufio.Reader, label, def string) string {
 }
 
 // readLine reads one line with basic left/right cursor editing (←/→, Home/End,
-// Backspace, Delete) by putting the terminal in raw mode for the read. Falls
-// back to a plain buffered read when stdin is not an interactive terminal or
-// raw mode can't be set. Any leading lines in prompt (before the last "\n") are
-// printed as a static header so the editable prompt stays a single line.
-func readLine(in *bufio.Reader, prompt string) string {
+// Backspace, Delete) by putting the terminal in raw mode for the read. initial
+// pre-fills the editable buffer. Falls back to a plain buffered read when stdin
+// is not an interactive terminal or raw mode can't be set. Any leading lines in
+// prompt (before the last "\n") are printed as a static header so the editable
+// prompt stays a single line.
+func readLine(in *bufio.Reader, prompt, initial string) string {
 	static, edit := "", prompt
 	if i := strings.LastIndex(prompt, "\n"); i >= 0 {
 		static, edit = prompt[:i+1], prompt[i+1:]
@@ -201,13 +223,14 @@ func readLine(in *bufio.Reader, prompt string) string {
 	}
 	if oldState == nil || err != nil {
 		// Not a TTY (piped/redirected) or raw mode unavailable: plain read.
+		// Pre-fill can't be edited here, so ask()'s empty→def fallback covers it.
 		fmt.Print(edit)
 		line, _ := in.ReadString('\n')
 		return strings.TrimSpace(line)
 	}
 	defer term.Restore(fd, oldState)
 
-	line, abort := editLine(in, os.Stdout, edit)
+	line, abort := editLine(in, os.Stdout, edit, initial)
 	if abort {
 		term.Restore(fd, oldState)
 		os.Exit(130)
@@ -219,9 +242,9 @@ func readLine(in *bufio.Reader, prompt string) string {
 // the edited line to out, and returns the trimmed result. abort is true when the
 // user pressed ctrl-c. It is independent of terminal setup so it can be tested
 // with synthetic input.
-func editLine(in io.RuneReader, out io.Writer, edit string) (result string, abort bool) {
-	var buf []rune
-	pos := 0
+func editLine(in io.RuneReader, out io.Writer, edit, initial string) (result string, abort bool) {
+	buf := []rune(initial)
+	pos := len(buf)
 	redraw := func() {
 		fmt.Fprint(out, "\r"+edit+string(buf)+"\x1b[K")
 		if back := len(buf) - pos; back > 0 {
@@ -304,7 +327,7 @@ func askYesNo(r *bufio.Reader, label string, def bool) bool {
 	if def {
 		suffix = "[Y/n]"
 	}
-	line := strings.ToLower(readLine(r, "? "+label+" "+suffix+": "))
+	line := strings.ToLower(readLine(r, "? "+label+" "+suffix+": ", ""))
 	if line == "" {
 		return def
 	}

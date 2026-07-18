@@ -228,23 +228,3 @@ func Push(worktreeDir, branch string) error {
 	_, err := run(worktreeDir, "push", "--force-with-lease", "-u", "origin", branch)
 	return err
 }
-
-// ResolveUsername returns the developer's GitHub username for use in branch
-// names. It tries `gh api user` first, then falls back to the git user.name
-// (lowercased, spaces replaced with hyphens), then to "me".
-func ResolveUsername() string {
-	if out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output(); err == nil {
-		if u := strings.TrimSpace(string(out)); u != "" {
-			return u
-		}
-	}
-	if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
-		u := strings.TrimSpace(string(out))
-		u = strings.ToLower(u)
-		u = strings.ReplaceAll(u, " ", "-")
-		if u != "" {
-			return u
-		}
-	}
-	return "me"
-}

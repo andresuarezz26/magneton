@@ -712,18 +712,13 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 		strings.Join(refs, "\n- ")
 }
 
-// resolveBranch fills a repo's branch pattern for a ticket. {username} is only
-// resolved (a `gh api user` call) when the pattern actually uses it, so the
-// common baked-in-username pattern never pays for a network round-trip.
+// resolveBranch fills a repo's branch pattern for a ticket, substituting the
+// {ticket} (lowercased id) and {slug} (kebab-case title) placeholders.
 func resolveBranch(pattern, ticket, summary string) string {
-	pairs := []string{
+	return strings.NewReplacer(
 		"{ticket}", strings.ToLower(ticket),
 		"{slug}", slugify(summary),
-	}
-	if strings.Contains(pattern, "{username}") {
-		pairs = append(pairs, "{username}", git.ResolveUsername())
-	}
-	return strings.NewReplacer(pairs...).Replace(pattern)
+	).Replace(pattern)
 }
 
 // prTitleFor builds the PR title, prepending a [feat]/[bug]/[chore] prefix

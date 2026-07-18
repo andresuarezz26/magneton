@@ -3,7 +3,6 @@ package runner
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/andresuarezz26/magneton/internal/config"
@@ -96,22 +95,15 @@ func TestPrTitleFor(t *testing.T) {
 }
 
 func TestResolveBranch(t *testing.T) {
-	// Baked-in username (no placeholder): {ticket}/{slug} substituted, no gh call.
-	got := resolveBranch("andresuarezz26/{ticket}-{slug}", "PROJ-1", "Add pull to refresh")
-	if got != "andresuarezz26/proj-1-add-pull-to-refresh" {
-		t.Errorf("baked-in pattern: got %q", got)
+	cases := map[string]struct{ pattern, ticket, summary, want string }{
+		"default":   {"{ticket}-{slug}", "PROJ-1", "Add pull to refresh", "proj-1-add-pull-to-refresh"},
+		"feature":   {"feature/{ticket}", "PROJ-2", "Fix bug", "feature/proj-2"},
+		"nested":    {"{ticket}/{slug}", "PROJ-3", "Clean up", "proj-3/clean-up"},
+		"no tokens": {"static-branch", "PROJ-4", "x", "static-branch"},
 	}
-
-	// Pattern with {username}: the placeholder must be resolved away (whatever
-	// ResolveUsername returns, the literal token must not survive).
-	got = resolveBranch("{username}/{ticket}-{slug}", "PROJ-2", "Fix bug")
-	if strings.Contains(got, "{username}") {
-		t.Errorf("branch still contains {username}: %q", got)
-	}
-	if !strings.HasSuffix(got, "/proj-2-fix-bug") {
-		t.Errorf("branch tail wrong: %q", got)
-	}
-	if strings.HasPrefix(got, "/") {
-		t.Errorf("username resolved to empty, got leading slash: %q", got)
+	for name, c := range cases {
+		if got := resolveBranch(c.pattern, c.ticket, c.summary); got != c.want {
+			t.Errorf("%s: resolveBranch(%q) = %q, want %q", name, c.pattern, got, c.want)
+		}
 	}
 }
