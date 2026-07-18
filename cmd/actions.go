@@ -161,13 +161,38 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 			note = "opened Claude Code in a new tab"
 		case "window":
 			note = "opened Claude Code in a new window"
-			// On Apple Terminal, tabs need Accessibility permission - guide the user.
+			// On Apple Terminal, tabs need Accessibility permission. Prompt the user
+			// once (clear message + jump to the right Settings pane), and keep a
+			// standing hint in the notice for subsequent opens.
 			if termProgram == "Apple_Terminal" {
 				note = "opened in a new window · grant Terminal Accessibility permission (System Settings ▸ Privacy) for tabs"
+				maybePromptTabPermission()
 			}
 		}
 		return claudeClosedMsg{note: note}
 	}
+}
+
+// accessibilityPromptScript explains (in the user's words) why the permission is
+// needed - to open Claude Code in a new tab - and opens the Accessibility pane of
+// System Settings when the user agrees.
+const accessibilityPromptScript = `set msg to "To open Claude Code in a new tab (instead of a separate window), macOS needs to let Terminal control keystrokes - the Accessibility permission.
+
+Turn ON Terminal under Accessibility, then use \"Open in Claude Code\" again."
+display dialog msg buttons {"Later", "Open Settings"} default button "Open Settings" with title "magneton · open Claude Code in tabs" with icon note
+if button returned of result is "Open Settings" then
+	do shell script "open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility\""
+end if`
+
+// maybePromptTabPermission shows the Accessibility guidance dialog at most once
+// per install (guarded by a marker file), so it informs without nagging.
+func maybePromptTabPermission() {
+	marker := filepath.Join(paths.Root(), ".tab-permission-prompted")
+	if _, err := os.Stat(marker); err == nil {
+		return // already shown
+	}
+	_ = exec.Command("osascript", "-e", accessibilityPromptScript).Run()
+	_ = os.WriteFile(marker, []byte("1\n"), 0o644)
 }
 
 // terminalLaunchScript builds the AppleScript that opens cmdline in a new

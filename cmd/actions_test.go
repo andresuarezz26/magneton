@@ -166,6 +166,35 @@ func TestOpenClaudeInteractiveOverride(t *testing.T) {
 	}
 }
 
+// maybePromptTabPermission must show the dialog at most once per install: after
+// the first call a marker file exists and further calls are no-ops. We can't pop
+// a real dialog in a test, so we pre-create the marker and assert it's respected.
+func TestMaybePromptTabPermissionOnce(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.Root(), ".tab-permission-prompted")
+
+	// Simulate "already prompted" so the call is a guaranteed no-op (never spawns
+	// osascript / a dialog).
+	if err := os.WriteFile(marker, []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	maybePromptTabPermission() // must return immediately without showing a dialog
+
+	// The dialog script mentions tabs and opens the Accessibility settings pane.
+	if !strings.Contains(accessibilityPromptScript, "new tab") {
+		t.Error("prompt should explain it's for opening a new tab")
+	}
+	if !strings.Contains(accessibilityPromptScript, "Privacy_Accessibility") {
+		t.Error("prompt should open the Accessibility settings pane")
+	}
+	if !strings.Contains(accessibilityPromptScript, "display dialog") {
+		t.Error("prompt should show a dialog")
+	}
+}
+
 func TestTerminalLaunchScript(t *testing.T) {
 	cmd := "cd '/x' && claude"
 	title := "TICKET-1 · ai/branch"
