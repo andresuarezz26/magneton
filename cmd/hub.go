@@ -42,14 +42,13 @@ type runLaunchedMsg struct {
 }
 
 // pendingTicket is one queued ticket in the "Start new ticket(s)" input, shown
-// as a chip. kind is content|jira|file.
+// as a chip. kind is content|jira.
 type pendingTicket struct {
 	id     string // ticket id (typed/confirmed; also the edit buffer while prompting)
 	title  string // parsed title (or the key itself, for a jira chip)
 	lines  int
-	kind   string   // "content" | "jira" | "file"
+	kind   string   // "content" | "jira"
 	body   string   // raw pasted content (content kind)
-	path   string   // on-disk path (file kind)
 	images []string // attached image files (content kind)
 	base   string   // chosen base branch name (bare); "" = default
 }
@@ -142,7 +141,7 @@ func (m monitorModel) runMethods() []runMethod {
 	if m.jira != nil {
 		ms = append(ms, runMethod{"jira", "From Jira", "enter Jira ticket key(s)"})
 	}
-	return append(ms, runMethod{"file", "Drag and drop a Markdown file", "drag one or more .md tickets into the terminal"})
+	return ms
 }
 
 func (m monitorModel) updateRunMethod(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -201,9 +200,7 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "content":
 		return m.updateRunContent(msg)
 	case "jira":
-		return m.updateRunTokens(msg, "jira")
-	case "file":
-		return m.updateRunFile(msg)
+		return m.updateRunJira(msg)
 	}
 	m.view = viewRunMethod // no mode set → back to the picker
 	return m, nil
@@ -248,40 +245,6 @@ func (m monitorModel) updateRunContent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// file method: only drag-and-drop is accepted. Typed characters are ignored so
-// a stray paste of ticket text can't create a bad chip. Multiple files dropped
-// at once arrive as one paste event and are all accepted.
-func (m monitorModel) updateRunFile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Paste {
-		for _, tok := range parseDroppedPaths(string(msg.Runes)) {
-			if strings.HasSuffix(strings.ToLower(tok), ".md") {
-				m.runTickets = append(m.runTickets, newFileTicket(tok))
-			}
-		}
-		return m, nil
-	}
-	switch msg.Type {
-	case tea.KeyEnter:
-		return m.launchOrClose()
-	case tea.KeyEsc:
-		return m.cancelRunInput(), nil
-	case tea.KeyBackspace:
-		if n := len(m.runTickets); n > 0 {
-			m.runTickets = m.runTickets[:n-1]
-		}
-	default:
-		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "ctrl+s":
-			if n := len(m.runTickets); n > 0 {
-				return m.openStackPicker(n - 1)
-			}
-		}
-	}
-	return m, nil
-}
-
 func (m monitorModel) addContentTicket(blob string) (tea.Model, tea.Cmd) {
 	blob = normalizeNewlines(blob) // terminals paste newlines as \r
 	if strings.TrimSpace(blob) == "" {
@@ -299,15 +262,15 @@ func (m monitorModel) addContentTicket(blob string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// jira/file methods: whitespace-separated tokens become chips directly.
-func (m monitorModel) updateRunTokens(msg tea.KeyMsg, kind string) (tea.Model, tea.Cmd) {
+// jira method: whitespace-separated Jira keys become chips directly.
+func (m monitorModel) updateRunJira(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Paste {
-		return m.commitTokens(string(msg.Runes), kind), nil
+		return m.commitJira(string(msg.Runes)), nil
 	}
 	switch msg.Type {
 	case tea.KeyEnter:
 		if strings.TrimSpace(m.runText) != "" {
-			m = m.commitTokens(m.runText, kind)
+			m = m.commitJira(m.runText)
 			m.runText = ""
 		}
 		return m.launchOrClose()
@@ -321,7 +284,7 @@ func (m monitorModel) updateRunTokens(msg tea.KeyMsg, kind string) (tea.Model, t
 		}
 	case tea.KeySpace:
 		if strings.TrimSpace(m.runText) != "" {
-			m = m.commitTokens(m.runText, kind)
+			m = m.commitJira(m.runText)
 			m.runText = ""
 		}
 	case tea.KeyRunes:
@@ -340,32 +303,14 @@ func (m monitorModel) updateRunTokens(msg tea.KeyMsg, kind string) (tea.Model, t
 	return m, nil
 }
 
-func (m monitorModel) commitTokens(s, kind string) monitorModel {
-	// parseDroppedPaths splits on whitespace but honors quotes/escapes, so a
-	// dragged .md path with spaces stays intact (Jira keys have neither, so it
-	// behaves like a plain field split for them).
-	for _, tok := range parseDroppedPaths(s) {
-		if kind == "jira" {
-			m.runTickets = append(m.runTickets, pendingTicket{
-				id: normalizeTicket(tok), title: tok, kind: "jira",
-			})
-		} else {
-			m.runTickets = append(m.runTickets, newFileTicket(tok))
-		}
+// commitJira turns whitespace-separated Jira keys into chips.
+func (m monitorModel) commitJira(s string) monitorModel {
+	for _, tok := range strings.Fields(s) {
+		m.runTickets = append(m.runTickets, pendingTicket{
+			id: normalizeTicket(tok), title: tok, kind: "jira",
+		})
 	}
 	return m
-}
-
-// newFileTicket builds a chip for a .md/text ticket file on disk.
-func newFileTicket(path string) pendingTicket {
-	t := pendingTicket{kind: "file", path: path, title: filepath.Base(path)}
-	if sp, err := loadLocalTicket(path); err == nil {
-		t.id, t.title = sp.ticket, sp.summary
-	}
-	if raw, err := os.ReadFile(path); err == nil {
-		t.lines = lineCount(string(raw))
-	}
-	return t
 }
 
 // updateRunImgAttach: drag image files into the terminal (their paths arrive as
@@ -654,14 +599,6 @@ func (m monitorModel) renderRunInput(w int) string {
 		chips()
 		b.WriteString("  › " + m.runText + "▌\n")
 		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
-	case "file":
-		b.WriteString(headerStyle.Render("  Drag and drop your local Markdown file (.md)") + "\n")
-		b.WriteString(dimStyle.Render("  drag one or more .md files from Finder into the terminal") + "\n\n")
-		chips()
-		if len(m.runTickets) == 0 {
-			b.WriteString("  " + dimStyle.Render("waiting for .md files…") + "\n")
-		}
-		b.WriteString("\n  " + dimStyle.Render("drag .md file · backspace remove · ctrl+s stack · enter launch · esc cancel"))
 	default: // content
 		b.WriteString(headerStyle.Render("  Paste ticket content") + "\n")
 		b.WriteString(dimStyle.Render("  paste a ticket; you'll confirm its id and attach images") + "\n\n")
@@ -689,8 +626,6 @@ func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 			switch t.kind {
 			case "content":
 				return writePastedTicket(t.id, t.body, t.images)
-			case "file":
-				return t.path, nil
 			default:
 				return t.id, nil
 			}

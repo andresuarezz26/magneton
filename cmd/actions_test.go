@@ -127,8 +127,11 @@ func TestDoActionTransitions(t *testing.T) {
 	if mm, _ := (monitorModel{}).doAction("menu"); mm.(monitorModel).view != viewPalette {
 		t.Error("menu → palette view")
 	}
-	if mm, _ := (monitorModel{}).doAction("run"); mm.(monitorModel).view != viewRunMethod {
-		t.Error("run → run-method picker")
+	// No Jira configured → a single method, so run skips the picker and goes
+	// straight into the paste-content input.
+	runM, _ := (monitorModel{}).doAction("run")
+	if hub := runM.(monitorModel); hub.view != viewRunInput || hub.runMode != "content" {
+		t.Errorf("run (single method) → content input; got view=%d mode=%q", hub.view, hub.runMode)
 	}
 	m := monitorModel{flat: []store.Session{{Ticket: "K1", State: "failed"}}, cursor: 2}
 	mm, _ := m.doAction("stop")

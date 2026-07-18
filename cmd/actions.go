@@ -237,7 +237,6 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	// --- global ---
 	case "run":
-		m.view = viewRunMethod
 		m.runMode = ""
 		m.runMethodCursor = 0
 		m.runText = ""
@@ -245,6 +244,14 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		m.runIDPrompt = -1
 		m.runImgPrompt = -1
 		m.notice = ""
+		// With a single input method (no Jira configured) the picker is just an
+		// extra keystroke - jump straight into that method's input.
+		if methods := m.runMethods(); len(methods) == 1 {
+			m.runMode = methods[0].mode
+			m.view = viewRunInput
+		} else {
+			m.view = viewRunMethod
+		}
 	case "doctor":
 		m.notice = "running doctor…"
 		return m, m.runDoctor()
