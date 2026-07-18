@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -168,17 +169,127 @@ func checkGitRemote(repoPath string) error {
 }
 
 func ask(r *bufio.Reader, label, def string) string {
+	prompt := "? " + label + ": "
 	if def != "" {
-		fmt.Printf("? %s [%s]: ", label, def)
-	} else {
-		fmt.Printf("? %s: ", label)
+		prompt = "? " + label + " [" + def + "]: "
 	}
-	line, _ := r.ReadString('\n')
-	line = strings.TrimSpace(line)
+	line := readLine(r, prompt)
 	if line == "" {
 		return def
 	}
 	return line
+}
+
+// readLine reads one line with basic left/right cursor editing (←/→, Home/End,
+// Backspace, Delete) by putting the terminal in raw mode for the read. Falls
+// back to a plain buffered read when stdin is not an interactive terminal or
+// raw mode can't be set. Any leading lines in prompt (before the last "\n") are
+// printed as a static header so the editable prompt stays a single line.
+func readLine(in *bufio.Reader, prompt string) string {
+	static, edit := "", prompt
+	if i := strings.LastIndex(prompt, "\n"); i >= 0 {
+		static, edit = prompt[:i+1], prompt[i+1:]
+	}
+	if static != "" {
+		fmt.Print(static)
+	}
+
+	fd := int(os.Stdin.Fd())
+	oldState, err := (*term.State)(nil), error(nil)
+	if term.IsTerminal(fd) {
+		oldState, err = term.MakeRaw(fd)
+	}
+	if oldState == nil || err != nil {
+		// Not a TTY (piped/redirected) or raw mode unavailable: plain read.
+		fmt.Print(edit)
+		line, _ := in.ReadString('\n')
+		return strings.TrimSpace(line)
+	}
+	defer term.Restore(fd, oldState)
+
+	line, abort := editLine(in, os.Stdout, edit)
+	if abort {
+		term.Restore(fd, oldState)
+		os.Exit(130)
+	}
+	return line
+}
+
+// editLine runs the raw-mode line-editing loop: it reads runes from in, echoes
+// the edited line to out, and returns the trimmed result. abort is true when the
+// user pressed ctrl-c. It is independent of terminal setup so it can be tested
+// with synthetic input.
+func editLine(in io.RuneReader, out io.Writer, edit string) (result string, abort bool) {
+	var buf []rune
+	pos := 0
+	redraw := func() {
+		fmt.Fprint(out, "\r"+edit+string(buf)+"\x1b[K")
+		if back := len(buf) - pos; back > 0 {
+			fmt.Fprintf(out, "\x1b[%dD", back)
+		}
+	}
+	redraw()
+	for {
+		rn, _, err := in.ReadRune()
+		if err != nil {
+			break
+		}
+		switch {
+		case rn == '\r' || rn == '\n':
+			fmt.Fprint(out, "\r\n")
+			return strings.TrimSpace(string(buf)), false
+		case rn == 3: // ctrl-c
+			fmt.Fprint(out, "\r\n")
+			return "", true
+		case rn == 127 || rn == 8: // backspace
+			if pos > 0 {
+				buf = append(buf[:pos-1], buf[pos:]...)
+				pos--
+			}
+		case rn == 27: // ESC: arrow/navigation sequence
+			b1, _, err := in.ReadRune()
+			if err != nil || (b1 != '[' && b1 != 'O') {
+				break
+			}
+			b2, _, err := in.ReadRune()
+			if err != nil {
+				break
+			}
+			switch b2 {
+			case 'D': // left
+				if pos > 0 {
+					pos--
+				}
+			case 'C': // right
+				if pos < len(buf) {
+					pos++
+				}
+			case 'H': // home
+				pos = 0
+			case 'F': // end
+				pos = len(buf)
+			case '3': // delete: ESC [ 3 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' && pos < len(buf) {
+					buf = append(buf[:pos], buf[pos+1:]...)
+				}
+			case '1', '7': // home variants: ESC [ 1 ~ / 7 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' {
+					pos = 0
+				}
+			case '4', '8': // end variants: ESC [ 4 ~ / 8 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' {
+					pos = len(buf)
+				}
+			}
+		case rn >= 32: // printable rune: insert at cursor
+			buf = append(buf, 0)
+			copy(buf[pos+1:], buf[pos:])
+			buf[pos] = rn
+			pos++
+		}
+		redraw()
+	}
+	return strings.TrimSpace(string(buf)), false
 }
 
 func askSecret(label string) string {
@@ -193,9 +304,7 @@ func askYesNo(r *bufio.Reader, label string, def bool) bool {
 	if def {
 		suffix = "[Y/n]"
 	}
-	fmt.Printf("? %s %s: ", label, suffix)
-	line, _ := r.ReadString('\n')
-	line = strings.ToLower(strings.TrimSpace(line))
+	line := strings.ToLower(readLine(r, "? "+label+" "+suffix+": "))
 	if line == "" {
 		return def
 	}
