@@ -95,21 +95,23 @@ func TestPrTitleFor(t *testing.T) {
 	}
 }
 
-func TestBranchPatternUsername(t *testing.T) {
-	t.Setenv("MAGNETON_HOME", t.TempDir())
-	// Ensure a deterministic username by calling slugify on what ResolveUsername returns.
-	// The key property: {username} is substituted (branch does not contain the literal placeholder).
-	pattern := "{username}/{ticket}-{slug}"
-	branch := strings.NewReplacer(
-		"{ticket}", "proj-1",
-		"{slug}", "add-feature",
-		"{username}", "testuser",
-	).Replace(pattern)
-	if branch != "testuser/proj-1-add-feature" {
-		t.Errorf("branch substitution: got %q", branch)
+func TestResolveBranch(t *testing.T) {
+	// Baked-in username (no placeholder): {ticket}/{slug} substituted, no gh call.
+	got := resolveBranch("andresuarezz26/{ticket}-{slug}", "PROJ-1", "Add pull to refresh")
+	if got != "andresuarezz26/proj-1-add-pull-to-refresh" {
+		t.Errorf("baked-in pattern: got %q", got)
 	}
-	// Literal placeholder must not survive.
-	if strings.Contains(branch, "{username}") {
-		t.Error("branch still contains {username} placeholder")
+
+	// Pattern with {username}: the placeholder must be resolved away (whatever
+	// ResolveUsername returns, the literal token must not survive).
+	got = resolveBranch("{username}/{ticket}-{slug}", "PROJ-2", "Fix bug")
+	if strings.Contains(got, "{username}") {
+		t.Errorf("branch still contains {username}: %q", got)
+	}
+	if !strings.HasSuffix(got, "/proj-2-fix-bug") {
+		t.Errorf("branch tail wrong: %q", got)
+	}
+	if strings.HasPrefix(got, "/") {
+		t.Errorf("username resolved to empty, got leading slash: %q", got)
 	}
 }

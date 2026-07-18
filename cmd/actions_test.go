@@ -141,42 +141,25 @@ func TestDoActionTransitions(t *testing.T) {
 	}
 }
 
-func TestInjectInteractiveOverride(t *testing.T) {
-	dir := t.TempDir()
-
-	// First call: file absent → creates CLAUDE.md with override block.
-	injectInteractiveOverride(dir)
-	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
-	if err != nil {
-		t.Fatal(err)
+// TestOpenClaudeInteractiveOverride verifies the interactive override is a
+// non-empty system-prompt string (passed via --append-system-prompt, never
+// written to a worktree file, so it can't pollute the user's PR commit).
+func TestOpenClaudeInteractiveOverride(t *testing.T) {
+	if interactiveOverride == "" {
+		t.Fatal("interactiveOverride must be a non-empty instruction")
 	}
-	if !strings.Contains(string(data), "magneton-interactive-override") {
-		t.Error("first call: sentinel not found")
+	if !strings.Contains(interactiveOverride, "interactive") {
+		t.Errorf("override should mention the interactive session: %q", interactiveOverride)
 	}
-	if !strings.Contains(string(data), "interactive session") {
-		t.Error("first call: override text not found")
+	// A single-quoted shell arg must survive without breaking (no embedded
+	// single quotes that shellQuote can't handle cleanly).
+	quoted := shellQuote(interactiveOverride)
+	if !strings.HasPrefix(quoted, "'") || !strings.HasSuffix(quoted, "'") {
+		t.Errorf("override not safely shell-quoted: %q", quoted)
 	}
-
-	// Second call: idempotent — file must not grow.
-	injectInteractiveOverride(dir)
-	data2, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
-	if len(data2) != len(data) {
-		t.Errorf("second call: content changed (len %d → %d)", len(data), len(data2))
-	}
-
-	// Existing content is preserved.
-	dir2 := t.TempDir()
-	existing := []byte("# My Project\nsome rules here\n")
-	if err := os.WriteFile(filepath.Join(dir2, "CLAUDE.md"), existing, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	injectInteractiveOverride(dir2)
-	combined, _ := os.ReadFile(filepath.Join(dir2, "CLAUDE.md"))
-	if !strings.Contains(string(combined), "# My Project") {
-		t.Error("existing content was overwritten")
-	}
-	if !strings.Contains(string(combined), "magneton-interactive-override") {
-		t.Error("override not appended to existing CLAUDE.md")
+	// Must be a single line so it embeds safely in the AppleScript `do script`.
+	if strings.Contains(interactiveOverride, "\n") {
+		t.Error("override must be a single line for safe terminal embedding")
 	}
 }
 

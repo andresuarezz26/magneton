@@ -79,11 +79,7 @@ func Run(t Task, h Hooks) Outcome {
 	}
 
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-		"{username}", git.ResolveUsername(),
-	).Replace(repo.Branch)
+	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
 
@@ -503,11 +499,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-		"{username}", git.ResolveUsername(),
-	).Replace(repo.Branch)
+	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -586,11 +578,7 @@ func shipOnly(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-		"{username}", git.ResolveUsername(),
-	).Replace(repo.Branch)
+	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -722,6 +710,20 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 	return t.Description +
 		"\n\nAttached screenshots - use the Read tool to view each before planning and implementing:\n- " +
 		strings.Join(refs, "\n- ")
+}
+
+// resolveBranch fills a repo's branch pattern for a ticket. {username} is only
+// resolved (a `gh api user` call) when the pattern actually uses it, so the
+// common baked-in-username pattern never pays for a network round-trip.
+func resolveBranch(pattern, ticket, summary string) string {
+	pairs := []string{
+		"{ticket}", strings.ToLower(ticket),
+		"{slug}", slugify(summary),
+	}
+	if strings.Contains(pattern, "{username}") {
+		pairs = append(pairs, "{username}", git.ResolveUsername())
+	}
+	return strings.NewReplacer(pairs...).Replace(pattern)
 }
 
 // prTitleFor builds the PR title, prepending a [feat]/[bug]/[chore] prefix

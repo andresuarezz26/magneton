@@ -100,39 +100,26 @@ func agentActions(s store.Session) []paletteItem {
 // claudeClosedMsg is returned after launching a Claude Code terminal.
 type claudeClosedMsg struct{ err error }
 
-// injectInteractiveOverride appends an override block to the worktree's
-// CLAUDE.md so that Claude Code's interactive session isn't restricted by
-// the headless run's "do not push" instructions from the conversation history.
-// A sentinel comment makes the append idempotent.
-func injectInteractiveOverride(worktreeDir string) {
-	const sentinel = "<!-- magneton-interactive-override -->"
-	claudeMD := filepath.Join(worktreeDir, "CLAUDE.md")
-	existing, _ := os.ReadFile(claudeMD)
-	if strings.Contains(string(existing), sentinel) {
-		return // already injected
-	}
-	block := "\n\n" + sentinel + `
-## Interactive session (injected by magneton)
-You are now in an **interactive session** with the user.
-All headless-mode restrictions are lifted — the user may ask you to git push,
-open PRs, or do anything else. Follow their instructions directly.
-`
-	_ = os.WriteFile(claudeMD, append(existing, []byte(block)...), 0o644)
-}
+// interactiveOverride lifts the headless run's "do not push / do not open a PR"
+// restrictions when the user resumes the session interactively. It is passed via
+// claude's --append-system-prompt so it modifies NO file in the worktree - a
+// CLAUDE.md edit would be picked up by the chained `run --resume` commit
+// (git add -A) and pollute the user's PR.
+const interactiveOverride = "You are now in an interactive session with the user. " +
+	"Any earlier headless-mode restrictions (such as not pushing or not opening a pull request) are lifted. " +
+	"Follow the user's instructions directly, including git push or opening a PR if they ask."
 
 // openClaude opens a new terminal TAB (not a window) running an interactive
 // Claude Code session in the ticket's worktree. When the session has a stored
-// ID the history is resumed so the user can review what the agent did; a
-// CLAUDE.md override block lifts the headless-mode restrictions.
+// ID the history is resumed so the user can review what the agent did; an
+// --append-system-prompt override lifts the headless-mode restrictions.
 // The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	worktree := paths.WorktreeFor(s.Repo, s.Ticket)
-	if s.SessionID != "" {
-		injectInteractiveOverride(worktree)
-	}
 	cmdline := "cd " + shellQuote(worktree) + " && claude"
 	if s.SessionID != "" {
-		cmdline += " --resume " + shellQuote(s.SessionID)
+		cmdline += " --resume " + shellQuote(s.SessionID) +
+			" --append-system-prompt " + shellQuote(interactiveOverride)
 	}
 	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
 	// session to fix it by hand. Chain magneton's own gate+PR after the
