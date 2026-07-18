@@ -98,8 +98,13 @@ func agentActions(s store.Session) []paletteItem {
 	return items
 }
 
-// claudeClosedMsg is returned after launching a Claude Code terminal.
-type claudeClosedMsg struct{ err error }
+// claudeClosedMsg is returned after launching a Claude Code terminal. note is a
+// human-facing status ("opened … in a new tab/window", plus any hint); err is
+// set only when the launch actually failed.
+type claudeClosedMsg struct {
+	err  error
+	note string
+}
 
 // interactiveOverride lifts the headless run's "do not push / do not open a PR"
 // restrictions when the user resumes the session interactively. It is passed via
@@ -140,7 +145,8 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	if s.Branch != "" {
 		title += " · " + s.Branch
 	}
-	script := terminalLaunchScript(os.Getenv("TERM_PROGRAM"), cmdline, title)
+	termProgram := os.Getenv("TERM_PROGRAM")
+	script := terminalLaunchScript(termProgram, cmdline, title)
 	return func() tea.Msg {
 		// Run (not Start) so an AppleScript failure actually surfaces instead of
 		// silently "succeeding". osascript returns as soon as the window/tab is
@@ -149,7 +155,18 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 		if err != nil {
 			return claudeClosedMsg{err: fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))}
 		}
-		return claudeClosedMsg{}
+		note := "opened Claude Code in a new terminal"
+		switch strings.TrimSpace(string(out)) {
+		case "tab":
+			note = "opened Claude Code in a new tab"
+		case "window":
+			note = "opened Claude Code in a new window"
+			// On Apple Terminal, tabs need Accessibility permission - guide the user.
+			if termProgram == "Apple_Terminal" {
+				note = "opened in a new window · grant Terminal Accessibility permission (System Settings ▸ Privacy) for tabs"
+			}
+		}
+		return claudeClosedMsg{note: note}
 	}
 }
 
@@ -175,17 +192,40 @@ func terminalLaunchScript(termProgram, cmdline, title string) string {
 			"\t\t\tset name to \"" + t + "\"\n" +
 			"\t\tend try\n" +
 			"\tend tell\n" +
-			"end tell"
+			"end tell\n" +
+			"return \"tab\""
 	}
-	// Apple Terminal and fallback: `do script` with no target always opens a
-	// NEW window and runs the command there.
-	return "tell application \"Terminal\"\n" +
-		"\tactivate\n" +
-		"\tset t to do script \"" + cmd + "\"\n" +
+	// Apple Terminal has no scripting command to make a tab, so we simulate Cmd+T
+	// via System Events. That needs Accessibility permission; when it's missing
+	// the keystroke is a no-op, so we compare the front window's tab count before
+	// and after and only run "in front window" (the new tab) if one actually
+	// appeared - otherwise we open a NEW window with a plain `do script`, which
+	// always works. This is bulletproof: no permission → a window, never a
+	// command injected into magneton's own tab.
+	return "tell application \"Terminal\" to activate\n" +
+		"set tabsBefore to -1\n" +
+		"tell application \"Terminal\"\n" +
+		"\tif (count of windows) > 0 then set tabsBefore to (count of tabs of front window)\n" +
+		"end tell\n" +
+		"try\n" +
+		"\ttell application \"System Events\" to keystroke \"t\" using command down\n" +
+		"end try\n" +
+		"delay 0.3\n" +
+		"set outcome to \"window\"\n" +
+		"tell application \"Terminal\"\n" +
+		"\tset madeTab to false\n" +
+		"\tif tabsBefore >= 0 and (count of tabs of front window) > tabsBefore then set madeTab to true\n" +
+		"\tif madeTab then\n" +
+		"\t\tset t to do script \"" + cmd + "\" in front window\n" +
+		"\t\tset outcome to \"tab\"\n" +
+		"\telse\n" +
+		"\t\tset t to do script \"" + cmd + "\"\n" +
+		"\tend if\n" +
 		"\ttry\n" +
 		"\t\tset custom title of t to \"" + t + "\"\n" +
 		"\tend try\n" +
-		"end tell"
+		"end tell\n" +
+		"return outcome"
 }
 
 // asEscapeAS escapes a string for embedding inside an AppleScript double-quoted literal.

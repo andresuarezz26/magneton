@@ -170,25 +170,36 @@ func TestTerminalLaunchScript(t *testing.T) {
 	cmd := "cd '/x' && claude"
 	title := "TICKET-1 · ai/branch"
 
-	// Apple Terminal (and any unknown terminal) → a NEW window via `do script`.
-	// Crucially it must NOT use `in front window`, which injects into the tab
-	// already running magneton.
+	// Apple Terminal (and any unknown terminal) → try a new tab (Cmd+T), but only
+	// run "in front window" when a new tab is verified to exist; otherwise open a
+	// NEW window. The tab-count guard is what prevents injecting into magneton's
+	// own tab when Accessibility permission is missing.
 	for _, tp := range []string{"Apple_Terminal", "", "vscode", "ghostty", "WezTerm"} {
 		got := terminalLaunchScript(tp, cmd, title)
 		if !strings.Contains(got, `application "Terminal"`) {
 			t.Errorf("%q: expected Terminal.app target:\n%s", tp, got)
 		}
-		if !strings.Contains(got, "do script") {
-			t.Errorf("%q: expected `do script`:\n%s", tp, got)
+		// Both branches present: tab (in front window) and window fallback.
+		if !strings.Contains(got, `do script "cd '/x' && claude" in front window`) {
+			t.Errorf("%q: expected the new-tab branch:\n%s", tp, got)
 		}
-		if strings.Contains(got, "in front window") {
-			t.Errorf("%q: must NOT target the front window (that hijacks magneton's tab):\n%s", tp, got)
+		if !strings.Contains(got, `do script "cd '/x' && claude"`+"\n") {
+			t.Errorf("%q: expected the new-window fallback branch:\n%s", tp, got)
 		}
-		if !strings.Contains(got, "cd '/x' && claude") {
-			t.Errorf("%q: command not embedded:\n%s", tp, got)
+		// The tab branch must be guarded by the before/after tab-count check so it
+		// never injects into magneton's tab when the keystroke is a no-op.
+		if !strings.Contains(got, "tabsBefore") || !strings.Contains(got, "count of tabs of front window") {
+			t.Errorf("%q: tab branch must be guarded by a tab-count check:\n%s", tp, got)
+		}
+		if !strings.Contains(got, "keystroke \"t\" using command down") {
+			t.Errorf("%q: expected the Cmd+T tab attempt:\n%s", tp, got)
 		}
 		if !strings.Contains(got, "set custom title") {
 			t.Errorf("%q: title not set:\n%s", tp, got)
+		}
+		// Reports which path ran so the UI can guide the user toward tabs.
+		if !strings.Contains(got, "return outcome") {
+			t.Errorf("%q: script should return its outcome:\n%s", tp, got)
 		}
 	}
 
