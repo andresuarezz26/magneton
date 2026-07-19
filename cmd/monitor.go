@@ -210,7 +210,6 @@ type monitorModel struct {
 	// "[N lines added]" right where the cursor was, exactly like Claude Code.
 	answering    bool
 	answerKey    string
-	answerMode   string      // "" = answering questions; "plan-feedback" = plan feedback
 	answerAtoms  []inputAtom // typed chars + paste placeholders, in order
 	answerCursor int         // index into answerAtoms (0..len)
 	notice       string      // transient status/error line under the footer
@@ -241,10 +240,16 @@ type monitorModel struct {
 
 	// full-screen plan viewer (viewPlan). planLines is the glamour-rendered
 	// markdown, pre-split into rows and re-rendered on resize; planScroll is the
-	// top visible row.
-	planTicket string
-	planScroll int
-	planLines  []string
+	// top visible row. planMenu is the top action selection (0=feedback 1=approve).
+	// When planFeedback is on, an inline input lets the user type corrections while
+	// the plan stays visible above.
+	planTicket   string
+	planScroll   int
+	planLines    []string
+	planMenu     int
+	planFeedback bool
+	planFbAtoms  []inputAtom
+	planFbCursor int
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -633,20 +638,13 @@ func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		key := m.answerKey
-		mode := m.answerMode
 		m.answering = false
-		m.answerMode = ""
 		m.answerAtoms = nil
 		m.answerCursor = 0
-		if mode == "plan-feedback" {
-			m.notice = "sending plan feedback to " + key + "…"
-			return m, m.submitPlanFeedback(key, full)
-		}
 		m.notice = "sending answer to " + key + "…"
 		return m, m.submitAnswer(key, full)
 	case tea.KeyEsc:
 		m.answering = false
-		m.answerMode = ""
 		m.answerAtoms = nil
 		m.answerCursor = 0
 	case tea.KeyLeft:
@@ -871,8 +869,10 @@ func (m monitorModel) View() string {
 		footer = dimStyle.Render("  y: share · n: skip")
 	} else if m.confirming != "" {
 		footer = dimStyle.Render("  ↑↓ move · enter select · esc cancel")
+	} else if m.view == viewPlan && m.planFeedback {
+		footer = dimStyle.Render("  type your correction · enter: send · esc: cancel · ↑↓: scroll plan")
 	} else if m.view == viewPlan {
-		footer = dimStyle.Render("  ↑↓/PgUp/PgDn scroll · a: approve · f: give feedback · esc: back")
+		footer = dimStyle.Render("  ←→ select · enter: choose · ↑↓/PgUp/PgDn: scroll · esc: back")
 	} else if m.answering {
 		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
 	}
@@ -1093,10 +1093,20 @@ func renderMarkdownLines(md string, w int) []string {
 	return strings.Split(strings.TrimRight(out, "\n"), "\n")
 }
 
-// planViewportHeight is how many rows of the plan are visible: the terminal
-// height minus the header (2), the title row, and the footer (2).
+// planChrome is the number of non-plan rows the viewer draws around the plan
+// window: app header (1), title (1), menu block (2), and the frame footer (2).
+// When the feedback input is open it adds its block (separator + up to 2 rows).
+func (m monitorModel) planChrome() int {
+	c := 6
+	if m.planFeedback {
+		c += 3
+	}
+	return c
+}
+
+// planViewportHeight is how many rows of the plan are visible.
 func (m monitorModel) planViewportHeight() int {
-	h := m.height - 5
+	h := m.height - m.planChrome()
 	if h < 3 {
 		h = 3
 	}
@@ -1113,10 +1123,24 @@ func (m monitorModel) openPlanView(s store.Session) (tea.Model, tea.Cmd) {
 	}
 	m.planTicket = s.Ticket
 	m.planScroll = 0
+	m.planMenu = 0
+	m.planFeedback = false
+	m.planFbAtoms = nil
+	m.planFbCursor = 0
 	m.planLines = renderMarkdownLines(md, m.paneWidth())
 	m.view = viewPlan
 	m.notice = ""
 	return m, nil
+}
+
+// openPlanFeedback opens the viewer straight into the feedback input.
+func (m monitorModel) openPlanFeedback(s store.Session) (tea.Model, tea.Cmd) {
+	mm, cmd := m.openPlanView(s)
+	hub := mm.(monitorModel)
+	if hub.view == viewPlan { // only if a plan was actually found
+		hub.planFeedback = true
+	}
+	return hub, cmd
 }
 
 // paneWidth is the wrap width for the plan viewer (leave a small right margin).
@@ -1128,47 +1152,138 @@ func (m monitorModel) paneWidth() int {
 	return w - 2
 }
 
-// updatePlan handles keys in the full-screen plan viewer: scroll, approve (a),
-// give feedback (f), or leave (esc/q).
-func (m monitorModel) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	viewH := m.planViewportHeight()
-	maxScroll := len(m.planLines) - viewH
-	if maxScroll < 0 {
-		maxScroll = 0
+// clampPlanScroll keeps the scroll offset within [0, max].
+func (m *monitorModel) clampPlanScroll() {
+	max := len(m.planLines) - m.planViewportHeight()
+	if max < 0 {
+		max = 0
 	}
+	if m.planScroll > max {
+		m.planScroll = max
+	}
+	if m.planScroll < 0 {
+		m.planScroll = 0
+	}
+}
+
+// updatePlan handles keys in the full-screen plan viewer. Two modes: the top
+// menu (←→ select · enter choose) and the inline feedback input (which keeps the
+// plan visible above so the user can scroll it while writing corrections).
+func (m monitorModel) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.planFeedback {
+		return m.updatePlanFeedback(msg)
+	}
+	viewH := m.planViewportHeight()
 	switch msg.String() {
 	case "esc", "q":
 		m.view = viewDashboard
 	case "ctrl+c":
 		return m, tea.Quit
+	case "left", "h", "right", "l", "tab":
+		m.planMenu = 1 - m.planMenu // toggle between the two menu items
 	case "up", "k":
-		if m.planScroll > 0 {
-			m.planScroll--
-		}
+		m.planScroll--
+		m.clampPlanScroll()
 	case "down", "j":
-		if m.planScroll < maxScroll {
-			m.planScroll++
-		}
+		m.planScroll++
+		m.clampPlanScroll()
 	case "pgup", "b":
 		m.planScroll -= viewH
-		if m.planScroll < 0 {
-			m.planScroll = 0
-		}
+		m.clampPlanScroll()
 	case "pgdown", " ":
 		m.planScroll += viewH
-		if m.planScroll > maxScroll {
-			m.planScroll = maxScroll
-		}
+		m.clampPlanScroll()
 	case "home", "g":
 		m.planScroll = 0
 	case "end", "G":
-		m.planScroll = maxScroll
-	case "a":
-		m.syncCursorTo(m.planTicket) // a background reload may have moved the row
-		return m.doAction("approve-plan")
-	case "f":
-		m.syncCursorTo(m.planTicket)
-		return m.doAction("plan-feedback")
+		m.planScroll = len(m.planLines)
+		m.clampPlanScroll()
+	case "enter":
+		if m.planMenu == 1 { // Approve
+			m.syncCursorTo(m.planTicket) // a background reload may have moved the row
+			return m.doAction("approve-plan")
+		}
+		m.planFeedback = true // Give feedback: open the inline input
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+		m.clampPlanScroll()
+	}
+	return m, nil
+}
+
+// updatePlanFeedback edits the inline feedback text. Enter submits (re-plan with
+// the correction), esc cancels back to the menu; up/down/PgUp/PgDn still scroll
+// the plan so it stays reviewable while typing.
+func (m monitorModel) updatePlanFeedback(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Paste {
+		blob := normalizeNewlines(string(msg.Runes))
+		if blob == "" {
+			return m, nil
+		}
+		if oneLine := strings.TrimRight(blob, "\n"); !strings.Contains(oneLine, "\n") && len([]rune(oneLine)) <= pasteInlineMaxRunes {
+			for _, ch := range oneLine {
+				m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ch})
+			}
+		} else {
+			m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{blob: blob})
+		}
+		return m, nil
+	}
+	viewH := m.planViewportHeight()
+	switch msg.Type {
+	case tea.KeyEnter:
+		full := strings.TrimSpace(answerText(m.planFbAtoms))
+		if full == "" { // empty submit cancels back to the menu
+			m.planFeedback = false
+			return m, nil
+		}
+		key := m.planTicket
+		m.planFeedback = false
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+		m.view = viewDashboard
+		m.notice = "sending plan feedback to " + key + "…"
+		m.syncCursorTo(key)
+		return m, m.submitPlanFeedback(key, full)
+	case tea.KeyEsc:
+		m.planFeedback = false // back to the menu, plan stays open
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+	case tea.KeyUp:
+		m.planScroll--
+		m.clampPlanScroll()
+	case tea.KeyDown:
+		m.planScroll++
+		m.clampPlanScroll()
+	case tea.KeyPgUp:
+		m.planScroll -= viewH
+		m.clampPlanScroll()
+	case tea.KeyPgDown:
+		m.planScroll += viewH
+		m.clampPlanScroll()
+	case tea.KeyLeft:
+		if m.planFbCursor > 0 {
+			m.planFbCursor--
+		}
+	case tea.KeyRight:
+		if m.planFbCursor < len(m.planFbAtoms) {
+			m.planFbCursor++
+		}
+	case tea.KeyBackspace:
+		if m.planFbCursor > 0 {
+			m.planFbAtoms = append(m.planFbAtoms[:m.planFbCursor-1], m.planFbAtoms[m.planFbCursor:]...)
+			m.planFbCursor--
+		}
+	case tea.KeySpace:
+		m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ' '})
+	case tea.KeyRunes:
+		for _, ch := range msg.Runes {
+			m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ch})
+		}
+	default:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
 	}
 	return m, nil
 }
@@ -1184,13 +1299,15 @@ func (m *monitorModel) syncCursorTo(ticket string) {
 	}
 }
 
-// renderPlan is the full-screen plan viewer body: a scrollable window over the
-// glamour-rendered plan.
+// renderPlan is the full-screen plan viewer: a top action menu, a scrollable
+// window over the glamour-rendered plan, and (when active) an inline feedback
+// input below the plan.
 func (m monitorModel) renderPlan(w int) string {
 	var b strings.Builder
-	title := "  Plan · " + m.planTicket
-	pct := ""
+
+	// Title + scroll position.
 	viewH := m.planViewportHeight()
+	pct := ""
 	if len(m.planLines) > viewH {
 		bottom := m.planScroll + viewH
 		if bottom > len(m.planLines) {
@@ -1198,8 +1315,23 @@ func (m monitorModel) renderPlan(w int) string {
 		}
 		pct = fmt.Sprintf("  %d–%d of %d", m.planScroll+1, bottom, len(m.planLines))
 	}
-	b.WriteString(headerStyle.Render(truncate(title, w)) + dimStyle.Render(pct) + "\n")
+	b.WriteString(headerStyle.Render(truncate("  Plan · "+m.planTicket, w)) + dimStyle.Render(pct) + "\n")
 
+	// Action menu: two items, the selected one highlighted (dimmed while typing
+	// feedback, since the input has focus then).
+	items := []string{"Give feedback", "Approve"}
+	var menu strings.Builder
+	menu.WriteString("  ")
+	for i, it := range items {
+		if !m.planFeedback && i == m.planMenu {
+			menu.WriteString(selStyle.Render(" "+it+" ") + "   ")
+		} else {
+			menu.WriteString(dimStyle.Render(" "+it+" ") + "   ")
+		}
+	}
+	b.WriteString(menu.String() + "\n\n")
+
+	// Plan window.
 	start := m.planScroll
 	if start > len(m.planLines)-viewH {
 		start = len(m.planLines) - viewH
@@ -1213,6 +1345,39 @@ func (m monitorModel) renderPlan(w int) string {
 	}
 	for _, ln := range m.planLines[start:end] {
 		b.WriteString(ln + "\n")
+	}
+
+	// Inline feedback input, below the plan.
+	if m.planFeedback {
+		b.WriteString(sepStyle.Render(strings.Repeat("─", w)) + "\n")
+		var line strings.Builder
+		for i, a := range m.planFbAtoms {
+			if i == m.planFbCursor {
+				line.WriteString("▌")
+			}
+			if a.blob != "" {
+				n := lineCount(a.blob)
+				line.WriteString(fmt.Sprintf("[%d line%s added]", n, plural(n)))
+			} else {
+				line.WriteRune(a.r)
+			}
+		}
+		if m.planFbCursor >= len(m.planFbAtoms) {
+			line.WriteString("▌")
+		}
+		const prefix = "  feedback › "
+		segs := wrapLine(line.String(), w-len([]rune(prefix)))
+		if len(segs) == 0 {
+			b.WriteString(prefix + "\n")
+		} else {
+			for i, seg := range segs {
+				if i == 0 {
+					b.WriteString(prefix + seg + "\n")
+				} else {
+					b.WriteString("    " + seg + "\n")
+				}
+			}
+		}
 	}
 	return b.String()
 }

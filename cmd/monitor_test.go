@@ -203,9 +203,9 @@ func TestRenderMarkdownLines(t *testing.T) {
 
 // updatePlan scrolls within bounds and leaves on esc.
 func TestUpdatePlanScrollAndExit(t *testing.T) {
-	m := monitorModel{view: viewPlan, height: 10, planTicket: "K-1"}
-	// 30 rows, viewport = height-5 = 5 → maxScroll = 25.
-	m.planLines = make([]string, 30)
+	m := monitorModel{view: viewPlan, height: 20, planTicket: "K-1"}
+	m.planLines = make([]string, 50)
+	maxScroll := len(m.planLines) - m.planViewportHeight()
 
 	// Down clamps up from 0.
 	nm, _ := m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
@@ -217,16 +217,56 @@ func TestUpdatePlanScrollAndExit(t *testing.T) {
 	if got := nm.(monitorModel).planScroll; got != 0 {
 		t.Errorf("up at top: scroll = %d, want 0", got)
 	}
-	// End jumps to maxScroll (25), and further down won't exceed it.
-	m.planScroll = 25
+	// End jumps to the max, and further down won't exceed it.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyEnd})
+	if got := nm.(monitorModel).planScroll; got != maxScroll {
+		t.Errorf("end: scroll = %d, want %d", got, maxScroll)
+	}
+	m.planScroll = maxScroll
 	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
-	if got := nm.(monitorModel).planScroll; got != 25 {
-		t.Errorf("down at bottom: scroll = %d, want 25 (clamped)", got)
+	if got := nm.(monitorModel).planScroll; got != maxScroll {
+		t.Errorf("down at bottom: scroll = %d, want %d (clamped)", got, maxScroll)
 	}
 	// Esc returns to the dashboard.
 	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyEsc})
 	if got := nm.(monitorModel).view; got != viewDashboard {
 		t.Errorf("esc: view = %d, want dashboard", got)
+	}
+}
+
+// The plan viewer's top menu: ←→ toggles between "Give feedback" (0) and
+// "Approve" (1); enter on "Give feedback" opens the inline input, and esc in the
+// input returns to the menu with the plan still open.
+func TestPlanMenuAndFeedbackToggle(t *testing.T) {
+	m := monitorModel{view: viewPlan, height: 20, planTicket: "K-1"}
+	m.planLines = make([]string, 12)
+
+	// Default selection is "Give feedback" (0); right toggles to "Approve" (1).
+	nm, _ := m.updatePlan(tea.KeyMsg{Type: tea.KeyRight})
+	if got := nm.(monitorModel).planMenu; got != 1 {
+		t.Errorf("right: planMenu = %d, want 1", got)
+	}
+	// Left toggles back to "Give feedback" (0).
+	nm, _ = nm.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyLeft})
+	if got := nm.(monitorModel).planMenu; got != 0 {
+		t.Errorf("left: planMenu = %d, want 0", got)
+	}
+	// Enter on "Give feedback" opens the inline input (stays in the plan view).
+	nm, _ = nm.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if !hub.planFeedback || hub.view != viewPlan {
+		t.Errorf("enter feedback: planFeedback=%v view=%d, want true/viewPlan", hub.planFeedback, hub.view)
+	}
+	// Typing appends to the feedback buffer.
+	hub2, _ := hub.updatePlan(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	if got := answerText(hub2.(monitorModel).planFbAtoms); got != "hi" {
+		t.Errorf("typed feedback = %q, want %q", got, "hi")
+	}
+	// Esc cancels the input but keeps the plan open (back to the menu).
+	hub3, _ := hub2.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyEsc})
+	h3 := hub3.(monitorModel)
+	if h3.planFeedback || h3.view != viewPlan {
+		t.Errorf("esc feedback: planFeedback=%v view=%d, want false/viewPlan", h3.planFeedback, h3.view)
 	}
 }
 

@@ -87,41 +87,54 @@ func Run(t Task, h Hooks) Outcome {
 
 	// 1. Provision an isolated worktree (Decision 7).
 	setState(store.StatePlanning, 0)
-	// Resolve the stacked base: the flag wins, but on a plain re-run (no --base)
-	// fall back to the value persisted at creation time so re-running a stacked
-	// ticket doesn't silently reset it to origin/<default> and drop the parent's
-	// commits. (finishShip reads the same stored value for the PR base.)
-	stackBase := t.Base
-	if stackBase == "" && t.Store != nil {
-		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
-			stackBase = sess.BaseBranch
-		}
-	}
-	// Resolve the base ref: prefer a local branch (covers in-progress parents),
-	// then fall back to origin/<name>, then origin/<default>. Validate before
-	// creating the worktree so a bad base surfaces a clear error rather than a
-	// raw git message.
-	baseRef := "origin/" + func() string {
-		if repo.Base != "" {
-			return repo.Base
-		}
-		return git.DefaultBranch(repo.Path)
-	}()
-	if stackBase != "" {
-		if git.RefExists(repo.Path, stackBase) {
-			baseRef = stackBase // local branch (e.g. in-progress parent)
-		} else if git.RefExists(repo.Path, "origin/"+stackBase) {
-			baseRef = "origin/" + stackBase
-		} else {
+	if t.FromPlan {
+		// Approve path: REUSE the worktree the human reviewed. CreateWorktree
+		// removes and recreates the dir (os.RemoveAll), which would destroy the
+		// reviewed .agent/plan.json that --from-plan implements from.
+		if !worktreeReady(worktree) {
+			logf("[%s] needs-you: approve requested but the reviewed worktree is gone", t.Ticket)
 			setState(store.StateNeedsYou, 0)
-			return Outcome{State: store.StateNeedsYou,
-				Err: fmt.Errorf("stack base %q: no local or remote branch found", stackBase)}
+			needsYouComment("approve requested but the reviewed worktree is gone - re-run the ticket to plan again")
+			return Outcome{State: store.StateNeedsYou}
 		}
-	}
-	logf("[%s] worktree %s on %s (base: %s)", t.Ticket, worktree, branch, baseRef)
-	if err := git.CreateWorktree(repo.Path, worktree, branch, baseRef); err != nil {
-		setState(store.StateFailed, 0)
-		return Outcome{State: store.StateFailed, Err: fmt.Errorf("create worktree: %w", err)}
+		logf("[%s] from-plan: reusing the reviewed worktree %s on %s", t.Ticket, worktree, branch)
+	} else {
+		// Resolve the stacked base: the flag wins, but on a plain re-run (no --base)
+		// fall back to the value persisted at creation time so re-running a stacked
+		// ticket doesn't silently reset it to origin/<default> and drop the parent's
+		// commits. (finishShip reads the same stored value for the PR base.)
+		stackBase := t.Base
+		if stackBase == "" && t.Store != nil {
+			if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
+				stackBase = sess.BaseBranch
+			}
+		}
+		// Resolve the base ref: prefer a local branch (covers in-progress parents),
+		// then fall back to origin/<name>, then origin/<default>. Validate before
+		// creating the worktree so a bad base surfaces a clear error rather than a
+		// raw git message.
+		baseRef := "origin/" + func() string {
+			if repo.Base != "" {
+				return repo.Base
+			}
+			return git.DefaultBranch(repo.Path)
+		}()
+		if stackBase != "" {
+			if git.RefExists(repo.Path, stackBase) {
+				baseRef = stackBase // local branch (e.g. in-progress parent)
+			} else if git.RefExists(repo.Path, "origin/"+stackBase) {
+				baseRef = "origin/" + stackBase
+			} else {
+				setState(store.StateNeedsYou, 0)
+				return Outcome{State: store.StateNeedsYou,
+					Err: fmt.Errorf("stack base %q: no local or remote branch found", stackBase)}
+			}
+		}
+		logf("[%s] worktree %s on %s (base: %s)", t.Ticket, worktree, branch, baseRef)
+		if err := git.CreateWorktree(repo.Path, worktree, branch, baseRef); err != nil {
+			setState(store.StateFailed, 0)
+			return Outcome{State: store.StateFailed, Err: fmt.Errorf("create worktree: %w", err)}
+		}
 	}
 	if h.OnField != nil {
 		h.OnField(branch, worktree, "")

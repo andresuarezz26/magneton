@@ -185,7 +185,6 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		if s := m.selected(); s != nil && s.State == "awaiting-answer" {
 			m.answering = true
 			m.answerKey = s.Ticket
-			m.answerMode = ""
 			m.answerAtoms = nil
 			m.answerCursor = 0
 			m.notice = ""
@@ -205,14 +204,10 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			return m, m.spawnRun(arg, "--from-plan")
 		}
 	case "plan-feedback":
+		// Feedback lives inside the full-screen plan viewer so the plan stays
+		// visible while the user types corrections.
 		if s := m.selected(); s != nil {
-			m.view = viewDashboard // the feedback input renders on the dashboard
-			m.answering = true
-			m.answerKey = s.Ticket
-			m.answerMode = "plan-feedback"
-			m.answerAtoms = nil
-			m.answerCursor = 0
-			m.notice = ""
+			return m.openPlanFeedback(*s)
 		}
 	case "studio":
 		if s := m.selected(); s != nil {
