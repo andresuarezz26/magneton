@@ -1043,7 +1043,7 @@ func configFields(cfg *config.Config) []formField {
 	}
 	return []formField{
 		{label: "Repository path for the Android app", value: repo.Path},
-		{label: "Branch name pattern for new PRs", value: repo.Branch},
+		{label: "Branch name pattern", value: repo.Branch},
 		{label: "Base branch to open PRs against (blank = repo default)", value: repo.Base},
 		{label: "Model for the planning stage (blank = Claude Code default)", value: cfg.ModelPlan},
 		{label: "Model for the implementation stage (blank = default)", value: cfg.ModelImpl},
