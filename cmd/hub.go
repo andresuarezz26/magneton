@@ -983,6 +983,12 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = viewDashboard
 		return m, nil
 	}
+	// Pasted text: drop it in at the caret as a single line (config fields are
+	// single-line, so collapse any newlines).
+	if msg.Paste {
+		m.form.typeRunes(strings.ReplaceAll(normalizeNewlines(string(msg.Runes)), "\n", " "))
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.view = viewDashboard
@@ -998,8 +1004,18 @@ func (m monitorModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.form.next()
 	case tea.KeyShiftTab, tea.KeyUp:
 		m.form.prev()
+	case tea.KeyLeft:
+		m.form.left()
+	case tea.KeyRight:
+		m.form.right()
+	case tea.KeyHome:
+		m.form.home()
+	case tea.KeyEnd:
+		m.form.end()
 	case tea.KeyBackspace:
 		m.form.backspace()
+	case tea.KeyDelete:
+		m.form.deleteForward()
 	case tea.KeySpace:
 		m.form.typeRunes(" ")
 	case tea.KeyRunes:
@@ -1093,6 +1109,7 @@ func (m *monitorModel) openConfigForm() {
 			return formDoneMsg{notice: "config saved"}
 		},
 	}
+	m.form.focusEnd()
 	m.view = viewForm
 }
 
@@ -1129,5 +1146,6 @@ func (m *monitorModel) openSetupForm() {
 			return formDoneMsg{notice: "setup saved - pick Doctor to verify"}
 		},
 	}
+	m.form.focusEnd()
 	m.view = viewForm
 }
