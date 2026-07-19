@@ -70,6 +70,7 @@ func agentActions(s store.Session) []paletteItem {
 	// and the human approves it or sends it back for a re-plan.
 	if s.State == store.StatePlanReview {
 		items = append(items,
+			paletteItem{"view-plan", "View the plan", "read the full plan in a scrollable view"},
 			paletteItem{"approve-plan", "Approve plan & implement", "continue: implement → verify → PR"},
 			paletteItem{"plan-feedback", "Give feedback & re-plan", "tell it what to change; it plans again"},
 		)
@@ -189,8 +190,13 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 			m.answerCursor = 0
 			m.notice = ""
 		}
+	case "view-plan":
+		if s := m.selected(); s != nil {
+			return m.openPlanView(*s)
+		}
 	case "approve-plan":
 		if s := m.selected(); s != nil {
+			m.view = viewDashboard // leave the plan viewer; the run resumes now
 			m.notice = "approving plan for " + s.Ticket + " - implementing…"
 			arg := s.Ticket
 			if s.SourcePath != "" {
@@ -200,6 +206,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		}
 	case "plan-feedback":
 		if s := m.selected(); s != nil {
+			m.view = viewDashboard // the feedback input renders on the dashboard
 			m.answering = true
 			m.answerKey = s.Ticket
 			m.answerMode = "plan-feedback"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -132,18 +133,100 @@ func TestWhyLinesPlanReview(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The detail pane is now a short teaser (approach + counts); the full plan,
+	// including the numbered steps, lives in the dedicated full-screen viewer.
 	lines := whyLines(s)
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
-		"Plan ready", "approve or give feedback",
+		"Plan ready", "read the full plan",
 		"Add pull to refresh on the feed",
-		"1. Wrap the list in SwipeRefresh",
-		"2. Wire the refresh callback",
-		"Confidence: high", "Type: feature",
+		"2 step(s)", "Confidence: high", "Type: feature",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("whyLines(plan-review) missing %q in:\n%s", want, joined)
 		}
+	}
+}
+
+// planMarkdownDoc builds a markdown doc from the worktree's plan.json.
+func TestPlanMarkdownDoc(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-50", Summary: "Add topics", State: store.StatePlanReview}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"Add topic discovery","steps":["Add topic field","Run tests"],"questions":["Which screen?"],"confidence":"high","type":"feature"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	md, ok := planMarkdownDoc(s)
+	if !ok {
+		t.Fatal("expected a plan doc")
+	}
+	for _, want := range []string{
+		"# K-50 · Add topics",
+		"**Confidence:** high",
+		"## Approach", "Add topic discovery",
+		"## Steps", "1. Add topic field", "2. Run tests",
+		"## Open questions", "- Which screen?",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("planMarkdownDoc missing %q in:\n%s", want, md)
+		}
+	}
+
+	// No plan on disk → ok=false.
+	if _, ok := planMarkdownDoc(store.Session{Ticket: "NOPE", State: store.StatePlanReview}); ok {
+		t.Error("expected ok=false when no plan.json exists")
+	}
+}
+
+// ansiRe strips terminal color codes so tests can match glamour's plain text.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// renderMarkdownLines produces styled, non-empty rows and never returns nil for
+// real content (falls back to raw markdown on any renderer error).
+func TestRenderMarkdownLines(t *testing.T) {
+	lines := renderMarkdownLines("# Title\n\n- alpha item\n- bravo item\n", 60)
+	if len(lines) == 0 {
+		t.Fatal("expected rendered rows")
+	}
+	plain := ansiRe.ReplaceAllString(strings.Join(lines, "\n"), "")
+	for _, want := range []string{"Title", "alpha item", "bravo item"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("rendered output missing %q in:\n%s", want, plain)
+		}
+	}
+}
+
+// updatePlan scrolls within bounds and leaves on esc.
+func TestUpdatePlanScrollAndExit(t *testing.T) {
+	m := monitorModel{view: viewPlan, height: 10, planTicket: "K-1"}
+	// 30 rows, viewport = height-5 = 5 → maxScroll = 25.
+	m.planLines = make([]string, 30)
+
+	// Down clamps up from 0.
+	nm, _ := m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
+	if got := nm.(monitorModel).planScroll; got != 1 {
+		t.Errorf("down: scroll = %d, want 1", got)
+	}
+	// Up never goes below 0.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyUp})
+	if got := nm.(monitorModel).planScroll; got != 0 {
+		t.Errorf("up at top: scroll = %d, want 0", got)
+	}
+	// End jumps to maxScroll (25), and further down won't exceed it.
+	m.planScroll = 25
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
+	if got := nm.(monitorModel).planScroll; got != 25 {
+		t.Errorf("down at bottom: scroll = %d, want 25 (clamped)", got)
+	}
+	// Esc returns to the dashboard.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := nm.(monitorModel).view; got != viewDashboard {
+		t.Errorf("esc: view = %d, want dashboard", got)
 	}
 }
 

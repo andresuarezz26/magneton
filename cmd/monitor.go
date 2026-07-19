@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
@@ -237,6 +238,13 @@ type monitorModel struct {
 	outputTitle     string
 	outputText      string
 	form            *formModel // active form (config/setup), nil otherwise
+
+	// full-screen plan viewer (viewPlan). planLines is the glamour-rendered
+	// markdown, pre-split into rows and re-rendered on resize; planScroll is the
+	// top visible row.
+	planTicket string
+	planScroll int
+	planLines  []string
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -304,10 +312,28 @@ func (m *monitorModel) selected() *store.Session {
 	return &m.flat[m.cursor-2]
 }
 
+// sessionByTicket returns the session with the given ticket id, or nil.
+func (m *monitorModel) sessionByTicket(ticket string) *store.Session {
+	for i := range m.flat {
+		if m.flat[i].Ticket == ticket {
+			return &m.flat[i]
+		}
+	}
+	return nil
+}
+
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Re-wrap the open plan for the new width (glamour bakes the wrap in).
+		if m.view == viewPlan {
+			if s := m.sessionByTicket(m.planTicket); s != nil {
+				if md, ok := planMarkdownDoc(*s); ok {
+					m.planLines = renderMarkdownLines(md, m.paneWidth())
+				}
+			}
+		}
 	case tickMsg:
 		m.reload()
 		return m, tick()
@@ -397,6 +423,8 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateRunInput(msg)
 	case viewOutput:
 		return m.updateOutput(msg)
+	case viewPlan:
+		return m.updatePlan(msg)
 	case viewForm:
 		return m.updateForm(msg)
 	}
@@ -427,6 +455,11 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.cursor == 1 {
 			return m.doAction("config")
+		}
+		// A ticket paused for plan review opens straight into the full-screen
+		// plan viewer; everything else opens the actions menu.
+		if s := m.selected(); s != nil && s.State == store.StatePlanReview {
+			return m.doAction("view-plan")
 		}
 		return m.doAction("menu")
 	case "a":
@@ -816,6 +849,8 @@ func (m monitorModel) View() string {
 		body = m.renderRunInput(w)
 	case viewOutput:
 		body = m.renderOutput(w)
+	case viewPlan:
+		body = m.renderPlan(w)
 	case viewForm:
 		if m.form != nil {
 			body = m.form.render(w)
@@ -836,6 +871,8 @@ func (m monitorModel) View() string {
 		footer = dimStyle.Render("  y: share · n: skip")
 	} else if m.confirming != "" {
 		footer = dimStyle.Render("  ↑↓ move · enter select · esc cancel")
+	} else if m.view == viewPlan {
+		footer = dimStyle.Render("  ↑↓/PgUp/PgDn scroll · a: approve · f: give feedback · esc: back")
 	} else if m.answering {
 		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
 	}
@@ -998,6 +1035,188 @@ func (m monitorModel) frame(head, body, notice, bar string, w int) string {
 	return b.String()
 }
 
+// planMarkdownDoc builds a markdown document from a session's plan.json for the
+// full-screen viewer. Returns ok=false when there's no readable plan yet.
+func planMarkdownDoc(s store.Session) (string, bool) {
+	plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket))
+	if err != nil || plan == nil {
+		return "", false
+	}
+	var b strings.Builder
+	title := s.Ticket
+	if s.Summary != "" {
+		title += " · " + s.Summary
+	}
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	if plan.Confidence != "" || plan.Type != "" {
+		fmt.Fprintf(&b, "**Confidence:** %s  ·  **Type:** %s\n\n", plan.Confidence, plan.Type)
+	}
+	if strings.TrimSpace(plan.Plan) != "" {
+		fmt.Fprintf(&b, "## Approach\n\n%s\n\n", plan.Plan)
+	}
+	if len(plan.Steps) > 0 {
+		b.WriteString("## Steps\n\n")
+		for i, step := range plan.Steps {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+		}
+		b.WriteString("\n")
+	}
+	if len(plan.Questions) > 0 {
+		b.WriteString("## Open questions\n\n")
+		for _, q := range plan.Questions {
+			fmt.Fprintf(&b, "- %s\n", q)
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), true
+}
+
+// renderMarkdownLines renders markdown to styled terminal rows via glamour,
+// wrapped to width w. A fixed "dark" style avoids glamour querying the terminal
+// for its background (which would clash with bubbletea's raw-mode screen). On any
+// error it falls back to the raw markdown so the viewer is never blank.
+func renderMarkdownLines(md string, w int) []string {
+	if w < 20 {
+		w = 20
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(w),
+	)
+	if err != nil {
+		return strings.Split(md, "\n")
+	}
+	out, err := r.Render(md)
+	if err != nil {
+		return strings.Split(md, "\n")
+	}
+	return strings.Split(strings.TrimRight(out, "\n"), "\n")
+}
+
+// planViewportHeight is how many rows of the plan are visible: the terminal
+// height minus the header (2), the title row, and the footer (2).
+func (m monitorModel) planViewportHeight() int {
+	h := m.height - 5
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// openPlanView renders the session's plan to markdown and switches to the
+// full-screen viewer. No-op (with a notice) when there's no plan to show.
+func (m monitorModel) openPlanView(s store.Session) (tea.Model, tea.Cmd) {
+	md, ok := planMarkdownDoc(s)
+	if !ok {
+		m.notice = "no plan to show yet for " + s.Ticket
+		return m, nil
+	}
+	m.planTicket = s.Ticket
+	m.planScroll = 0
+	m.planLines = renderMarkdownLines(md, m.paneWidth())
+	m.view = viewPlan
+	m.notice = ""
+	return m, nil
+}
+
+// paneWidth is the wrap width for the plan viewer (leave a small right margin).
+func (m monitorModel) paneWidth() int {
+	w := m.width
+	if w == 0 {
+		w = 80
+	}
+	return w - 2
+}
+
+// updatePlan handles keys in the full-screen plan viewer: scroll, approve (a),
+// give feedback (f), or leave (esc/q).
+func (m monitorModel) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	viewH := m.planViewportHeight()
+	maxScroll := len(m.planLines) - viewH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	switch msg.String() {
+	case "esc", "q":
+		m.view = viewDashboard
+	case "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.planScroll > 0 {
+			m.planScroll--
+		}
+	case "down", "j":
+		if m.planScroll < maxScroll {
+			m.planScroll++
+		}
+	case "pgup", "b":
+		m.planScroll -= viewH
+		if m.planScroll < 0 {
+			m.planScroll = 0
+		}
+	case "pgdown", " ":
+		m.planScroll += viewH
+		if m.planScroll > maxScroll {
+			m.planScroll = maxScroll
+		}
+	case "home", "g":
+		m.planScroll = 0
+	case "end", "G":
+		m.planScroll = maxScroll
+	case "a":
+		m.syncCursorTo(m.planTicket) // a background reload may have moved the row
+		return m.doAction("approve-plan")
+	case "f":
+		m.syncCursorTo(m.planTicket)
+		return m.doAction("plan-feedback")
+	}
+	return m, nil
+}
+
+// syncCursorTo points the selection at a ticket by id, so cursor-based actions
+// act on it even if a background reload reordered the list.
+func (m *monitorModel) syncCursorTo(ticket string) {
+	for i := range m.flat {
+		if m.flat[i].Ticket == ticket {
+			m.cursor = i + 2 // 0=Start-new 1=Edit-config agents=2..
+			return
+		}
+	}
+}
+
+// renderPlan is the full-screen plan viewer body: a scrollable window over the
+// glamour-rendered plan.
+func (m monitorModel) renderPlan(w int) string {
+	var b strings.Builder
+	title := "  Plan · " + m.planTicket
+	pct := ""
+	viewH := m.planViewportHeight()
+	if len(m.planLines) > viewH {
+		bottom := m.planScroll + viewH
+		if bottom > len(m.planLines) {
+			bottom = len(m.planLines)
+		}
+		pct = fmt.Sprintf("  %d–%d of %d", m.planScroll+1, bottom, len(m.planLines))
+	}
+	b.WriteString(headerStyle.Render(truncate(title, w)) + dimStyle.Render(pct) + "\n")
+
+	start := m.planScroll
+	if start > len(m.planLines)-viewH {
+		start = len(m.planLines) - viewH
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + viewH
+	if end > len(m.planLines) {
+		end = len(m.planLines)
+	}
+	for _, ln := range m.planLines[start:end] {
+		b.WriteString(ln + "\n")
+	}
+	return b.String()
+}
+
 // whyLines explains, for a needs-you/stopped/failed agent, what it's blocked on.
 func whyLines(s store.Session) []string {
 	if isStopped(s) {
@@ -1021,18 +1240,14 @@ func whyLines(s store.Session) []string {
 		}
 		return []string{"▮ Needs you - press ↵ enter to respond (see log below)."}
 	case store.StatePlanReview:
-		out := []string{"▮ Plan ready — press ↵ enter to approve or give feedback"}
+		// The full plan lives in the dedicated full-screen viewer (press enter);
+		// keep the detail pane to a short teaser so it never overflows the log.
+		out := []string{"▮ Plan ready - press ↵ enter to read the full plan, then approve or give feedback"}
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
 			if plan.Plan != "" {
-				out = append(out, "  Approach: "+plan.Plan)
+				out = append(out, "  "+plan.Plan)
 			}
-			if len(plan.Steps) > 0 {
-				out = append(out, "  Steps:")
-				for i, step := range plan.Steps {
-					out = append(out, fmt.Sprintf("    %d. %s", i+1, step))
-				}
-			}
-			out = append(out, fmt.Sprintf("  Confidence: %s · Type: %s", plan.Confidence, plan.Type))
+			out = append(out, fmt.Sprintf("  %d step(s) · Confidence: %s · Type: %s", len(plan.Steps), plan.Confidence, plan.Type))
 		}
 		return out
 	case "failed":

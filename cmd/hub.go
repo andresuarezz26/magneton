@@ -27,6 +27,7 @@ const (
 	viewOutput
 	viewForm
 	viewConsent
+	viewPlan // full-screen markdown plan viewer (plan-review gate)
 )
 
 // ---- messages --------------------------------------------------------------
