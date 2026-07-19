@@ -1042,13 +1042,13 @@ func configFields(cfg *config.Config) []formField {
 		repo = cfg.Repos[0]
 	}
 	return []formField{
-		{label: "Repo path", value: repo.Path},
-		{label: "Branch", value: repo.Branch},
-		{label: "Base branch (e.g. main)", value: repo.Base},
-		{label: "Model · plan (blank = default)", value: cfg.ModelPlan},
-		{label: "Model · implement (blank = default)", value: cfg.ModelImpl},
-		{label: "Model · review (blank = default)", value: cfg.ModelReview},
-		{label: "Review plans before implementing (y/n)", value: boolToYN(cfg.ReviewPlans)},
+		{label: "Repository path for the Android app", value: repo.Path},
+		{label: "Branch name pattern for new PRs", value: repo.Branch},
+		{label: "Base branch to open PRs against (blank = repo default)", value: repo.Base},
+		{label: "Model for the planning stage (blank = Claude Code default)", value: cfg.ModelPlan},
+		{label: "Model for the implementation stage (blank = default)", value: cfg.ModelImpl},
+		{label: "Model for the self-review stage (blank = default)", value: cfg.ModelReview},
+		{label: "Pause to review each plan before coding? (y/n)", value: boolToYN(cfg.ReviewPlans)},
 	}
 }
 
@@ -1124,7 +1124,7 @@ func (m *monitorModel) openSetupForm() {
 		}
 	}
 	fields := append(configFields(cfg),
-		formField{label: "Anthropic key (blank=skip)", secret: true},
+		formField{label: "Anthropic API key (blank = skip, saved to keychain)", secret: true},
 	)
 	m.form = &formModel{
 		title:  "Setup wizard",

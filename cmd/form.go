@@ -1,10 +1,21 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Form styles: the label (description) is muted, the editable value is a
+// distinct color so it stands out from the prose; the focused field brightens
+// both and gets a ▸ marker.
+var (
+	formLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	formValStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))  // cyan
+	formLabelFocus = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
+	formValFocus   = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true) // bright cyan
+	formMarkFocus  = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true)
 )
 
 // formField is one editable line in a form. secret fields render masked and are
@@ -117,7 +128,11 @@ func (f *formModel) render(w int) string {
 		if fld.secret {
 			val = strings.Repeat("•", len([]rune(fld.value)))
 		}
-		if i == f.focus {
+		focused := i == f.focus
+
+		marker, labelSty, valSty := "  ", formLabelStyle, formValStyle
+		if focused {
+			marker, labelSty, valSty = formMarkFocus.Render("▸ "), formLabelFocus, formValFocus
 			// Draw the caret inside the value at the cursor position.
 			r := []rune(val)
 			pos := fld.cursor
@@ -128,12 +143,20 @@ func (f *formModel) render(w int) string {
 				pos = len(r)
 			}
 			val = string(r[:pos]) + "▌" + string(r[pos:])
-			line := fmt.Sprintf("  %-20s %s", fld.label, val)
-			b.WriteString(truncate(selStyle.Render(line), w) + "\n")
-			continue
 		}
-		line := fmt.Sprintf("  %-20s %s", fld.label, val)
-		b.WriteString(truncate(line, w) + "\n")
+
+		// Truncate the plain value to the space left after the label, then style
+		// (styling first would let truncate cut an ANSI escape).
+		prefix := "  " + fld.label + ": "
+		avail := w - lipgloss.Width(prefix)
+		if avail < 6 {
+			avail = 6
+		}
+		shown := valSty.Render(truncate(val, avail))
+		if val == "" && !focused {
+			shown = dimStyle.Render("(empty)")
+		}
+		b.WriteString(marker + labelSty.Render(fld.label+":") + " " + shown + "\n")
 	}
 	b.WriteString("\n  " + dimStyle.Render("tab/↑↓ move · ←→ edit · type to change · enter save · esc cancel"))
 	return b.String()
