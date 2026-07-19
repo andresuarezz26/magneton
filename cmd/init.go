@@ -118,6 +118,10 @@ func wizard() error {
 	repo := config.Repo{Path: repoPath, Branch: branchPattern}
 	cfg.Repos = []config.Repo{repo}
 
+	// Plan-review gate default: pause each ticket after planning so the human can
+	// approve or give feedback before implementation begins.
+	cfg.ReviewPlans = askYesNo(r, "Pause each ticket for plan review before implementing?", false)
+
 	// Optional: per-stage models. Blank inherits whatever default Claude Code is
 	// configured with (respecting org policy), so most users can skip these.
 	fmt.Println("\n  - Models per stage [optional] ---------------------")

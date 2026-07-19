@@ -25,9 +25,11 @@ var (
 	runLocal  bool
 	runTitle  string
 	runDesc   string
-	runResume bool
-	runShip   bool
-	runBase   string
+	runResume     bool
+	runShip       bool
+	runBase       string
+	runReviewPlan bool
+	runFromPlan   bool
 )
 
 func init() {
@@ -45,6 +47,8 @@ func init() {
 	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
 	c.Flags().BoolVar(&runShip, "ship", false, "ship without verifying: trust your manual fix, commit + push + PR directly (use when verification itself is unreliable in the worktree)")
 	c.Flags().StringVar(&runBase, "base", "", "base branch (or ticket id) to stack on; overrides config default")
+	c.Flags().BoolVar(&runReviewPlan, "review-plan", false, "pause after planning so you can review the plan before implementation")
+	c.Flags().BoolVar(&runFromPlan, "from-plan", false, "skip planning: implement from the existing plan.json in the worktree")
 	rootCmd.AddCommand(c)
 }
 
@@ -213,9 +217,14 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 
 	logf("[%s] %s", sp.ticket, summary)
 
+	// Effective plan-review: the per-run flag wins, else fall back to the config
+	// default. Persisted so TUI re-spawns (answer/feedback) keep the gate on.
+	reviewPlan := runReviewPlan || cfg.ReviewPlans
+
 	// State store so `magneton status` reflects manual runs too.
 	_, _ = st.Claim(sp.ticket, repo.Path, summary)
 	_ = st.SetPID(sp.ticket, os.Getpid()) // for monitor liveness (kill -0)
+	_ = st.SetReviewPlan(sp.ticket, reviewPlan)
 	if sp.sourcePath != "" {
 		_ = st.SetSourcePath(sp.ticket, sp.sourcePath)
 	}
@@ -278,6 +287,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
 		Store: st, Images: sp.images, Base: resolvedBase,
+		ReviewPlan: reviewPlan, FromPlan: runFromPlan,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in
 	// the TUI/`agent logs` even when stdout/stderr is discarded (TUI-launched).

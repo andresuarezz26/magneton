@@ -38,6 +38,7 @@ type Config struct {
 	EmulatorIdleTimeout int     `toml:"emulator_idle_timeout"`
 	TelemetryEnabled    *bool   `toml:"telemetry_enabled"`
 	DeviceID            string  `toml:"device_id"`
+	ReviewPlans         bool    `toml:"review_plans"` // default per-ticket answer for the plan-review gate
 	Sandbox             Sandbox `toml:"sandbox"`
 	Repos               []Repo  `toml:"repo"`
 }

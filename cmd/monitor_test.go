@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
 
@@ -111,6 +112,67 @@ func TestIsStopped(t *testing.T) {
 	}
 	if isStopped(store.Session{State: "review", UpdatedAt: old}) {
 		t.Error("review is terminal; never stopped")
+	}
+}
+
+// whyLines for a plan-review session renders the approach and steps read from
+// the worktree's .agent/plan.json.
+func TestWhyLinesPlanReview(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-42", State: store.StatePlanReview}
+
+	// Stub a plan.json under the ticket's worktree path.
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	agentDir := filepath.Join(wt, ".agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"Add pull to refresh on the feed","steps":["Wrap the list in SwipeRefresh","Wire the refresh callback"],"confidence":"high","type":"feature"}`
+	if err := os.WriteFile(filepath.Join(agentDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := whyLines(s)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"Plan ready", "approve or give feedback",
+		"Add pull to refresh on the feed",
+		"1. Wrap the list in SwipeRefresh",
+		"2. Wire the refresh callback",
+		"Confidence: high", "Type: feature",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("whyLines(plan-review) missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+// agentActions for a plan-review session offers approve-plan and plan-feedback,
+// and does NOT offer resume/ship (plan-review is neither active nor stuck).
+func TestAgentActionsPlanReview(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	// Build a worktree so studio/claude also show, matching a real plan-review row.
+	wt := paths.WorktreeFor("", "K-43")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := map[string]bool{}
+	for _, it := range agentActions(store.Session{Ticket: "K-43", State: store.StatePlanReview}) {
+		ids[it.key] = true
+	}
+	for _, want := range []string{"approve-plan", "plan-feedback"} {
+		if !ids[want] {
+			t.Errorf("plan-review menu missing %q", want)
+		}
+	}
+	for _, no := range []string{"resume", "ship"} {
+		if ids[no] {
+			t.Errorf("plan-review should NOT offer %q", no)
+		}
 	}
 }
 

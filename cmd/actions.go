@@ -66,6 +66,14 @@ func agentActions(s store.Session) []paletteItem {
 	if s.State == "awaiting-answer" {
 		items = append(items, paletteItem{"answer", "Answer the questions", "reply, then the agent resumes"})
 	}
+	// Plan-review is an idle state (neither active nor stuck): the plan is ready
+	// and the human approves it or sends it back for a re-plan.
+	if s.State == store.StatePlanReview {
+		items = append(items,
+			paletteItem{"approve-plan", "Approve plan & implement", "continue: implement → verify → PR"},
+			paletteItem{"plan-feedback", "Give feedback & re-plan", "tell it what to change; it plans again"},
+		)
+	}
 	// Pause a live run: stop the agent but keep the worktree, dropping the ticket
 	// to NEEDS YOU so you can take over by hand (then Resume / Open a PR).
 	if active {
@@ -176,6 +184,25 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		if s := m.selected(); s != nil && s.State == "awaiting-answer" {
 			m.answering = true
 			m.answerKey = s.Ticket
+			m.answerMode = ""
+			m.answerAtoms = nil
+			m.answerCursor = 0
+			m.notice = ""
+		}
+	case "approve-plan":
+		if s := m.selected(); s != nil {
+			m.notice = "approving plan for " + s.Ticket + " - implementing…"
+			arg := s.Ticket
+			if s.SourcePath != "" {
+				arg = s.SourcePath
+			}
+			return m, m.spawnRun(arg, "--from-plan")
+		}
+	case "plan-feedback":
+		if s := m.selected(); s != nil {
+			m.answering = true
+			m.answerKey = s.Ticket
+			m.answerMode = "plan-feedback"
 			m.answerAtoms = nil
 			m.answerCursor = 0
 			m.notice = ""
@@ -242,6 +269,7 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		m.runTickets = nil
 		m.runIDPrompt = -1
 		m.runImgPrompt = -1
+		m.runReviewPrompt = -1
 		m.notice = ""
 		// With a single input method (no Jira configured) the picker is just an
 		// extra keystroke - jump straight into that method's input.

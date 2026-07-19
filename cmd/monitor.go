@@ -76,7 +76,7 @@ func launchHub() error {
 
 	m := monitorModel{
 		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
-		runIDPrompt: -1, runImgPrompt: -1, runStackPrompt: -1,
+		runIDPrompt: -1, runImgPrompt: -1, runStackPrompt: -1, runReviewPrompt: -1,
 	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -141,7 +141,8 @@ func newGroups() []*group {
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	return []*group{
 		{label: "NEEDS YOU", style: red, match: func(s store.Session) bool {
-			return s.State == "awaiting-answer" || s.State == "needs-you" || s.State == "failed"
+			return s.State == "awaiting-answer" || s.State == "needs-you" ||
+				s.State == "failed" || s.State == store.StatePlanReview
 		}},
 		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
 			return s.State == store.StateStopped || isStopped(s)
@@ -160,7 +161,7 @@ func glyphFor(s store.Session) string {
 		return "■"
 	}
 	switch s.State {
-	case "awaiting-answer":
+	case "awaiting-answer", store.StatePlanReview:
 		return "▮"
 	case "failed":
 		return "✗"
@@ -181,6 +182,9 @@ func stateLabel(s store.Session) string {
 	}
 	if s.State == store.StateReview {
 		return "under review"
+	}
+	if s.State == store.StatePlanReview {
+		return "plan ready"
 	}
 	return s.State
 }
@@ -205,6 +209,7 @@ type monitorModel struct {
 	// "[N lines added]" right where the cursor was, exactly like Claude Code.
 	answering    bool
 	answerKey    string
+	answerMode   string      // "" = answering questions; "plan-feedback" = plan feedback
 	answerAtoms  []inputAtom // typed chars + paste placeholders, in order
 	answerCursor int         // index into answerAtoms (0..len)
 	notice       string      // transient status/error line under the footer
@@ -223,6 +228,8 @@ type monitorModel struct {
 	runIDPrompt     int             // index of a content chip confirming its id; -1 = none
 	runImgPrompt    int             // index of a content chip attaching images; -1 = none
 	runStackPrompt  int             // index of a chip choosing its stack base; -1 = none
+	runReviewPrompt int             // index of a chip choosing its plan-review toggle; -1 = none
+	reviewCursor    int             // cursor in the plan-review mini palette (0=Yes 1=No)
 	stackBranches   []git.Branch    // loaded once when the stack picker opens
 	stackDefault    string          // repo's default branch name (main/master/…), for the default row
 	stackFilter     string          // search filter in the stack picker
@@ -593,13 +600,20 @@ func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		key := m.answerKey
+		mode := m.answerMode
 		m.answering = false
+		m.answerMode = ""
 		m.answerAtoms = nil
 		m.answerCursor = 0
+		if mode == "plan-feedback" {
+			m.notice = "sending plan feedback to " + key + "…"
+			return m, m.submitPlanFeedback(key, full)
+		}
 		m.notice = "sending answer to " + key + "…"
 		return m, m.submitAnswer(key, full)
 	case tea.KeyEsc:
 		m.answering = false
+		m.answerMode = ""
 		m.answerAtoms = nil
 		m.answerCursor = 0
 	case tea.KeyLeft:
@@ -636,9 +650,11 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 	self, st := m.selfPath, m.store
 	return func() tea.Msg {
 		var sourcePath string
+		reviewPlan := false
 		if st != nil {
 			if sess, err := st.Get(key); err == nil && sess != nil {
 				sourcePath = sess.SourcePath
+				reviewPlan = sess.ReviewPlan
 			}
 		}
 		if sourcePath == "" {
@@ -652,7 +668,47 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 		if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
 			return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
 		}
-		c := exec.Command(self, "run", sourcePath)
+		// Keep the plan-review gate across the re-run: a ticket that paused for the
+		// plan should pause again after re-planning on the answered version.
+		args := []string{"run", sourcePath}
+		if reviewPlan {
+			args = append(args, "--review-plan")
+		}
+		c := exec.Command(self, args...)
+		c.Stdout, c.Stderr = nil, nil
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Start(); err != nil {
+			return answerDoneMsg{ticket: key, err: err}
+		}
+		return answerDoneMsg{ticket: key}
+	}
+}
+
+// submitPlanFeedback appends the human's feedback to the .md source and re-runs
+// with --review-plan so the agent re-plans and pauses again for another review.
+// Same local-tickets-only limitation as submitAnswer (pasted tickets always have
+// a SourcePath, so the primary flow is covered).
+func (m monitorModel) submitPlanFeedback(key, feedback string) tea.Cmd {
+	self, st := m.selfPath, m.store
+	return func() tea.Msg {
+		var sourcePath string
+		if st != nil {
+			if sess, err := st.Get(key); err == nil && sess != nil {
+				sourcePath = sess.SourcePath
+			}
+		}
+		if sourcePath == "" {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("plan feedback via TUI only works for local .md tickets - use \"Open in Claude Code\" to give feedback in the session")}
+		}
+		raw, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("read %s: %w", sourcePath, err)}
+		}
+		updated := strings.TrimSpace(string(raw)) + "\n\n---\nPlan feedback:\n" + feedback
+		if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
+		}
+		c := exec.Command(self, "run", sourcePath, "--review-plan")
 		c.Stdout, c.Stderr = nil, nil
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := c.Start(); err != nil {
@@ -964,6 +1020,21 @@ func whyLines(s store.Session) []string {
 			return out
 		}
 		return []string{"▮ Needs you - press ↵ enter to respond (see log below)."}
+	case store.StatePlanReview:
+		out := []string{"▮ Plan ready — press ↵ enter to approve or give feedback"}
+		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
+			if plan.Plan != "" {
+				out = append(out, "  Approach: "+plan.Plan)
+			}
+			if len(plan.Steps) > 0 {
+				out = append(out, "  Steps:")
+				for i, step := range plan.Steps {
+					out = append(out, fmt.Sprintf("    %d. %s", i+1, step))
+				}
+			}
+			out = append(out, fmt.Sprintf("  Confidence: %s · Type: %s", plan.Confidence, plan.Type))
+		}
+		return out
 	case "failed":
 		return []string{
 			"✗ Failed - " + failReason(s.Ticket),

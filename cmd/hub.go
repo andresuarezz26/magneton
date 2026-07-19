@@ -48,9 +48,10 @@ type pendingTicket struct {
 	title  string // parsed title (or the key itself, for a jira chip)
 	lines  int
 	kind   string   // "content" | "jira"
-	body   string   // raw pasted content (content kind)
-	images []string // attached image files (content kind)
-	base   string   // chosen base branch name (bare); "" = default
+	body       string   // raw pasted content (content kind)
+	images     []string // attached image files (content kind)
+	base       string   // chosen base branch name (bare); "" = default
+	reviewPlan bool     // pause after the plan stage for human approval
 }
 type daemonMsg struct {
 	action string // "start" | "stop"
@@ -196,6 +197,9 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.runStackPrompt >= 0 {
 		return m.updateRunStack(msg)
 	}
+	if m.runReviewPrompt >= 0 {
+		return m.updateRunReview(msg)
+	}
 	switch m.runMode {
 	case "content":
 		return m.updateRunContent(msg)
@@ -210,6 +214,7 @@ func (m monitorModel) cancelRunInput() monitorModel {
 	m.view = viewDashboard
 	m.runMode, m.runText, m.runTickets = "", "", nil
 	m.runIDPrompt, m.runImgPrompt, m.runStackPrompt = -1, -1, -1
+	m.runReviewPrompt, m.reviewCursor = -1, 0
 	m.stackBranches, m.stackDefault, m.stackFilter, m.stackCursor = nil, "", "", 0
 	return m
 }
@@ -432,10 +437,10 @@ func (m monitorModel) updateRunStack(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.runStackPrompt, m.stackFilter, m.stackCursor = -1, "", 0
-		// Content tickets: the stack step is the last in the finalize chain.
-		// Auto-launch so the user doesn't need a second Enter.
+		// Content tickets: advance to the final plan-review toggle step (the last
+		// in the finalize chain), which launches on its Enter.
 		if isContentTicket {
-			return m.launchOrClose()
+			return m.openReviewPicker(i)
 		}
 	case tea.KeyEsc:
 		// Esc means "cancel the creation", not "launch with the default base".
@@ -519,6 +524,72 @@ func (m monitorModel) renderRunStack(w int) string {
 	return b.String()
 }
 
+// openReviewPicker enters the final plan-review toggle step for chip i, with the
+// cursor pre-selected from the config default (0 = Yes/pause, 1 = No/run through).
+func (m monitorModel) openReviewPicker(i int) (tea.Model, tea.Cmd) {
+	m.runReviewPrompt = i
+	m.reviewCursor = 1 // default: No (run straight through)
+	if cfg, err := config.Load(); err == nil && cfg.ReviewPlans {
+		m.reviewCursor = 0 // config opts in → pre-select Yes
+	}
+	return m, nil
+}
+
+// updateRunReview handles the two-item "Review the plan before implementing?"
+// mini palette. ↑↓ moves; Enter records the choice on the chip and launches; Esc
+// cancels the whole creation (consistent with the stack step for content tickets).
+func (m monitorModel) updateRunReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	i := m.runReviewPrompt
+	if i < 0 || i >= len(m.runTickets) {
+		m.runReviewPrompt = -1
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.runTickets[i].reviewPlan = m.reviewCursor == 0
+		m.runReviewPrompt, m.reviewCursor = -1, 0
+		return m.launchOrClose()
+	case tea.KeyEsc:
+		return m.cancelRunInput(), nil
+	case tea.KeyUp:
+		m.reviewCursor = 0
+	case tea.KeyDown:
+		m.reviewCursor = 1
+	default:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m monitorModel) renderRunReview(w int) string {
+	var b strings.Builder
+
+	// Show existing chips first so the context stays visible.
+	for _, t := range m.runTickets {
+		b.WriteString("  " + chipLabel(t) + "\n")
+	}
+	if len(m.runTickets) > 0 {
+		b.WriteString("\n")
+	}
+
+	b.WriteString(headerStyle.Render("  Review the plan before implementing?") + "\n\n")
+	items := []string{
+		"Yes — pause so I can approve or give feedback",
+		"No — run straight through",
+	}
+	for i, item := range items {
+		if i == m.reviewCursor {
+			b.WriteString(selStyle.Render(" "+item) + "\n")
+		} else {
+			b.WriteString("  " + item + "\n")
+		}
+	}
+	b.WriteString("\n  " + dimStyle.Render("↑↓ move · enter launch · esc cancel"))
+	return b.String()
+}
+
 // chipLabel renders a pending ticket chip label (shared by renderRunInput and renderRunStack).
 func chipLabel(t pendingTicket) string {
 	if t.kind == "jira" {
@@ -579,6 +650,9 @@ func (m monitorModel) renderRunInput(w int) string {
 	if m.runStackPrompt >= 0 {
 		return m.renderRunStack(w)
 	}
+	if m.runReviewPrompt >= 0 {
+		return m.renderRunReview(w)
+	}
 	var b strings.Builder
 	chips := func() {
 		for i, t := range m.runTickets {
@@ -597,6 +671,7 @@ func (m monitorModel) renderRunInput(w int) string {
 		b.WriteString(headerStyle.Render("  Confirm the ticket id") + "\n")
 		b.WriteString(dimStyle.Render("  fix it if it grabbed the epic, not the ticket") + "\n\n")
 		chips()
+		b.WriteString(renderBodyPreview(m.runTickets[m.runIDPrompt].body, w))
 		b.WriteString("  ticket id › " + m.runTickets[m.runIDPrompt].id + "▌\n")
 		b.WriteString("\n  " + dimStyle.Render("enter next · esc drop this ticket"))
 		return b.String()
@@ -604,6 +679,7 @@ func (m monitorModel) renderRunInput(w int) string {
 	if m.runImgPrompt >= 0 && m.runImgPrompt < len(m.runTickets) {
 		n := len(m.runTickets[m.runImgPrompt].images)
 		chips()
+		b.WriteString(renderBodyPreview(m.runTickets[m.runImgPrompt].body, w))
 		b.WriteString(headerStyle.Render("  Attach images (optional)") + "\n")
 		b.WriteString(dimStyle.Render("  drag image files into the terminal, then enter") + "\n\n")
 		b.WriteString("  › " + m.runText + "▌\n")
@@ -633,9 +709,11 @@ func (m monitorModel) renderRunInput(w int) string {
 func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 	self := m.selfPath
 	return func() tea.Msg {
+		// A per-ticket base OR a per-ticket plan-review flag forces the per-ticket
+		// subprocess path (batching one `run` call can't carry per-chip flags).
 		anyStacked := false
 		for _, t := range tickets {
-			if t.base != "" {
+			if t.base != "" || t.reviewPlan {
 				anyStacked = true
 				break
 			}
@@ -660,6 +738,9 @@ func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 				cmdArgs := []string{"run", arg}
 				if t.base != "" {
 					cmdArgs = append(cmdArgs, "--base", t.base)
+				}
+				if t.reviewPlan {
+					cmdArgs = append(cmdArgs, "--review-plan")
 				}
 				c := exec.Command(self, cmdArgs...)
 				c.Stdout, c.Stderr = nil, nil
@@ -778,6 +859,30 @@ func isImageFile(p string) bool {
 	}
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir()
+}
+
+// renderBodyPreview renders the first 12 lines of a pasted ticket body as a dim
+// quoted block so the user can see what they pasted while confirming its id and
+// attaching images (paste is blind otherwise - two corruption bugs slipped
+// through invisibly). Returns "" for an empty body (jira chips never have one).
+func renderBodyPreview(body string, w int) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	const maxLines = 12
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	var b strings.Builder
+	for i, ln := range lines {
+		if i >= maxLines {
+			break
+		}
+		b.WriteString(dimStyle.Render("  │ "+truncate(ln, w-4)) + "\n")
+	}
+	if n := len(lines) - maxLines; n > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  │ … +%d more lines", n)) + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // lineCount returns the number of lines in s, ignoring a single trailing newline.
@@ -921,7 +1026,24 @@ func configFields(cfg *config.Config) []formField {
 		{label: "Model · plan (blank = default)", value: cfg.ModelPlan},
 		{label: "Model · implement (blank = default)", value: cfg.ModelImpl},
 		{label: "Model · review (blank = default)", value: cfg.ModelReview},
+		{label: "Review plans before implementing (y/n)", value: boolToYN(cfg.ReviewPlans)},
 	}
+}
+
+// boolToYN / parseYN render and parse the loose y/n form field for booleans.
+func boolToYN(v bool) string {
+	if v {
+		return "y"
+	}
+	return "n"
+}
+
+func parseYN(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "y", "yes", "true", "1":
+		return true
+	}
+	return false
 }
 
 // applyConfigFields writes the (non-secret) form values back onto a config.
@@ -938,6 +1060,7 @@ func applyConfigFields(cfg *config.Config, f []formField) {
 	cfg.ModelPlan = f[3].value
 	cfg.ModelImpl = f[4].value
 	cfg.ModelReview = f[5].value
+	cfg.ReviewPlans = parseYN(f[6].value)
 	cfg.Repos = []config.Repo{repo}
 }
 

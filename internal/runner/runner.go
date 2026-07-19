@@ -36,6 +36,8 @@ type Task struct {
 	Store       *store.Store // optional; enables emulator coordination
 	Images      []string     // image files to make the agent see (pasted-content flow)
 	Base        string       // bare base branch name for stacked diffs; "" = default
+	ReviewPlan  bool         // pause after the plan stage for human approval (plan-review gate)
+	FromPlan    bool         // skip planning: implement straight from the existing plan.json
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
@@ -149,12 +151,23 @@ func Run(t Task, h Hooks) Outcome {
 		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
-	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts); err != nil {
-		logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+	// On the approve path (--from-plan) we skip re-planning entirely and implement
+	// straight from the plan.json the human already reviewed in the worktree
+	// (.agent/ is git-excluded, so it survives the branch reset on re-provision).
+	if !t.FromPlan {
+		if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts); err != nil {
+			logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+		}
 	}
 
 	plan, err := agent.ReadPlan(worktree)
 	if err != nil {
+		if t.FromPlan {
+			logf("[%s] needs-you: approve requested but no plan.json found in the worktree (%v)", t.Ticket, err)
+			setState(store.StateNeedsYou, 0)
+			needsYouComment("approve requested but no plan.json found in the worktree")
+			return Outcome{State: store.StateNeedsYou}
+		}
 		logf("[%s] needs-you: plan stage did not produce plan.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
 		needsYouComment(fmt.Sprintf("The plan stage failed to produce a plan - the ticket may be too ambiguous or the codebase too complex to analyse automatically.\n\nError: `%v`", err))
@@ -184,13 +197,26 @@ func Run(t Task, h Hooks) Outcome {
 			h.Comment(comment)
 		}
 	}
-	if len(plan.Questions) > 0 {
-		logf("[%s] awaiting-answer: %d question(s) posted to ticket", t.Ticket, len(plan.Questions))
-		for i, q := range plan.Questions {
-			logf("[%s]   Q%d: %s", t.Ticket, i+1, q)
+	// Questions always win: even with the plan-review gate on, blocking questions
+	// stop first so the human answers before there's a plan worth reviewing.
+	// On the approve path (--from-plan) the human has already seen the plan, so
+	// both the questions gate and the review gate are skipped.
+	if !t.FromPlan {
+		if len(plan.Questions) > 0 {
+			logf("[%s] awaiting-answer: %d question(s) posted to ticket", t.Ticket, len(plan.Questions))
+			for i, q := range plan.Questions {
+				logf("[%s]   Q%d: %s", t.Ticket, i+1, q)
+			}
+			setState(store.StateAwaiting, 0)
+			return Outcome{State: store.StateAwaiting}
 		}
-		setState(store.StateAwaiting, 0)
-		return Outcome{State: store.StateAwaiting}
+		// Plan-review gate: pause here so the human can approve or give feedback in
+		// the dashboard. The plan is already persisted in .agent/plan.json.
+		if t.ReviewPlan {
+			logf("[%s] plan-review: plan ready - approve or give feedback in the dashboard", t.Ticket)
+			setState(store.StatePlanReview, 0)
+			return Outcome{State: store.StatePlanReview}
+		}
 	}
 
 	// 4. IMPLEMENT stage - fast model, full tools, plan injected.

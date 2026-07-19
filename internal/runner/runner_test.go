@@ -50,6 +50,24 @@ func TestResumeRefusesWithoutWorktree(t *testing.T) {
 	}
 }
 
+// TestFromPlanWithoutPlanFailsFast: the approve path (--from-plan) with no
+// worktree/plan can't produce work - it must stop fast (failed on worktree
+// creation, or needs-you when the plan is missing), never silently proceed.
+// Mirrors TestResumeRefusesWithoutWorktree.
+func TestFromPlanWithoutPlanFailsFast(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	out := Run(Task{
+		Ticket:   "NOPE-2",
+		Summary:  "x",
+		FromPlan: true,
+		Repo:     &config.Repo{Path: filepath.Join(t.TempDir(), "no-such-repo"), Branch: "ai/{ticket}-{slug}"},
+		Cfg:      &config.Config{},
+	}, Hooks{})
+	if out.State != store.StateFailed && out.State != store.StateNeedsYou {
+		t.Errorf("from-plan with no worktree/plan should stop fast (failed or needs-you), got state=%q err=%v", out.State, out.Err)
+	}
+}
+
 func TestPrTitleFor(t *testing.T) {
 	dir := t.TempDir()
 
