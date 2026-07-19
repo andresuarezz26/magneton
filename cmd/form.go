@@ -7,15 +7,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Form styles: the label (description) is muted, the editable value is a
-// distinct color so it stands out from the prose; the focused field brightens
-// both and gets a ▸ marker.
+// Form styles: the label (description) is muted, the editable value uses the
+// primary color (same as "Start new ticket") so it stands out from the prose;
+// the focused field brightens both and gets a ▸ marker.
 var (
-	formLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	formValStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))  // cyan
-	formLabelFocus = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
-	formValFocus   = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true) // bright cyan
-	formMarkFocus  = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true)
+	formLabelStyle = lipgloss.NewStyle().Foreground(colorSubtle)
+	formValStyle   = lipgloss.NewStyle().Foreground(colorPrimary)
+	formLabelFocus = lipgloss.NewStyle().Foreground(colorText).Bold(true)
+	formValFocus   = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	formMarkFocus  = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
 )
 
 // formField is one editable line in a form. secret fields render masked and are

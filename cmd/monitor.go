@@ -136,10 +136,10 @@ type group struct {
 }
 
 func newGroups() []*group {
-	red := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	orange := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	green := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	red := lipgloss.NewStyle().Foreground(colorNeedsYou).Bold(true)
+	orange := lipgloss.NewStyle().Foreground(colorAttn).Bold(true)
+	cyan := lipgloss.NewStyle().Foreground(colorRunning).Bold(true)
+	green := lipgloss.NewStyle().Foreground(colorReview).Bold(true)
 	return []*group{
 		{label: "NEEDS YOU", style: red, match: func(s store.Session) bool {
 			return s.State == "awaiting-answer" || s.State == "needs-you" ||
@@ -795,22 +795,39 @@ func (m monitorModel) renderConsent(w int) string {
 
 // ---- view ------------------------------------------------------------------
 
+// Color palette - one place for every color so styles compose from named roles
+// instead of scattering raw 256-color codes. Add to this, don't invent new
+// literals at the call site.
+var (
+	colorPrimary  = lipgloss.Color("36")  // teal: CTAs, primary buttons, editable values
+	colorText     = lipgloss.Color("231") // bright white text
+	colorSubtle   = lipgloss.Color("250") // light gray (field labels)
+	colorMuted    = lipgloss.Color("245") // dim gray (hints, secondary text)
+	colorSep      = lipgloss.Color("240") // separators
+	colorSelBg    = lipgloss.Color("236") // selection background
+	colorMutedBg  = lipgloss.Color("238") // muted button background
+	colorNeedsYou = lipgloss.Color("203") // red    - NEEDS YOU group / errors
+	colorRunning  = lipgloss.Color("39")  // cyan   - RUNNING group
+	colorReview   = lipgloss.Color("42")  // green  - READY FOR REVIEW group
+	colorAttn     = lipgloss.Color("214") // orange - STOPPED group / warnings / hints
+)
+
 var (
 	headerStyle = lipgloss.NewStyle().Bold(true)
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
+	dimStyle    = lipgloss.NewStyle().Foreground(colorMuted)
+	selStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorSelBg)
 	// hintStyle accents the "↵ actions" affordance on the selected row. Same
 	// background as selStyle so the row highlight stays continuous under it.
-	hintStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Background(lipgloss.Color("236")).Bold(true)
-	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
-	ctaSelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).Background(lipgloss.Color("231")).Bold(true).Padding(0, 1)
+	hintStyle   = lipgloss.NewStyle().Foreground(colorAttn).Background(colorSelBg).Bold(true)
+	sepStyle    = lipgloss.NewStyle().Foreground(colorSep)
+	whyStyle    = lipgloss.NewStyle().Foreground(colorAttn).Bold(true)
+	ctaStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorPrimary).Bold(true).Padding(0, 1)
+	ctaSelStyle = lipgloss.NewStyle().Foreground(colorPrimary).Background(colorText).Bold(true).Padding(0, 1)
 
-	// Plan-viewer menu buttons: the selected one is a bright teal button, the
+	// Plan-viewer menu buttons: the selected one is a primary-teal button, the
 	// rest are clearly muted, so the selection is obvious at a glance.
-	planBtnSel = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 2)
-	planBtn    = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("238")).Padding(0, 2)
+	planBtnSel = lipgloss.NewStyle().Foreground(colorText).Background(colorPrimary).Bold(true).Padding(0, 2)
+	planBtn    = lipgloss.NewStyle().Foreground(colorSubtle).Background(colorMutedBg).Padding(0, 2)
 )
 
 func (m monitorModel) View() string {
@@ -837,7 +854,7 @@ func (m monitorModel) View() string {
 	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")+"  ·  "+daemon) + "\n")
 
 	if m.err != nil {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  error: "+m.err.Error()) + "\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(colorNeedsYou).Render("  error: "+m.err.Error()) + "\n")
 		return b.String()
 	}
 
