@@ -81,18 +81,17 @@ func agentActions(s store.Session) []paletteItem {
 		items = append(items, paletteItem{"pause", "Pause (move to NEEDS YOU)", "stop the running agent but keep the worktree so you can take over"})
 	}
 	if hasWT {
-		if stuck {
-			items = append(items,
-				paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"},
-				paletteItem{"ship", "Open a PR", "skip verification - commit + push + PR (when the gate itself is unreliable here)"},
-			)
-		}
-		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
+		// Order most-used first: hand-off (Claude / Studio), then Open a PR, Stop,
+		// and finally Resume (the least common recovery path).
 		// "Open in Claude Code" resumes the agent's session. Only offer it when no
 		// run is active - otherwise the headless agent and this interactive session
 		// would both write to the same session on disk and diverge.
 		if !active {
 			items = append(items, paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"})
+		}
+		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
+		if stuck {
+			items = append(items, paletteItem{"ship", "Open a PR", "skip verification - commit + push + PR (when the gate itself is unreliable here)"})
 		}
 	} else if stuck || done {
 		// Worktree is gone — only a fresh run is possible.
@@ -103,6 +102,10 @@ func agentActions(s store.Session) []paletteItem {
 	// stopped rows.
 	if !done && s.State != store.StateStopped {
 		items = append(items, paletteItem{"stop", "Stop & clean up", "kill the process and remove the worktree"})
+	}
+	// Resume re-runs verification on a hand-fixed worktree; least-common, so last.
+	if hasWT && stuck {
+		items = append(items, paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"})
 	}
 	return items
 }
@@ -288,9 +291,15 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "daemon-stop":
 		m.notice = "stopping daemon…"
 		return m, m.stopDaemon()
-	case "menu":
+	case "menu": // the ":" command menu - agent actions + global commands
 		m.view = viewPalette
 		m.paletteCursor = 0
+		m.paletteAgentOnly = false
+		m.notice = ""
+	case "agent-menu": // Enter on an agent row - only that agent's actions
+		m.view = viewPalette
+		m.paletteCursor = 0
+		m.paletteAgentOnly = true
 		m.notice = ""
 	case "refresh":
 		m.reload()

@@ -219,24 +219,25 @@ type monitorModel struct {
 	confirmCursor int // 0 = "Yes, stop" / 1 = "No, keep running"
 
 	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
-	view            hubView
-	paletteCursor   int
-	runMode         string          // "" | content | jira | file (active run-input method)
-	runMethodCursor int             // cursor in the run-method picker
-	runText         string          // run-new typed buffer (a key/path/id being typed)
-	runTickets      []pendingTicket // accumulated ticket chips awaiting launch
-	runIDPrompt     int             // index of a content chip confirming its id; -1 = none
-	runImgPrompt    int             // index of a content chip attaching images; -1 = none
-	runStackPrompt  int             // index of a chip choosing its stack base; -1 = none
-	runReviewPrompt int             // index of a chip choosing its plan-review toggle; -1 = none
-	reviewCursor    int             // cursor in the plan-review mini palette (0=Yes 1=No)
-	stackBranches   []git.Branch    // loaded once when the stack picker opens
-	stackDefault    string          // repo's default branch name (main/master/…), for the default row
-	stackFilter     string          // search filter in the stack picker
-	stackCursor     int             // cursor row in the filtered branch list
-	outputTitle     string
-	outputText      string
-	form            *formModel // active form (config/setup), nil otherwise
+	view             hubView
+	paletteCursor    int
+	paletteAgentOnly bool            // palette scoped to the selected agent (no global commands)
+	runMode          string          // "" | content | jira | file (active run-input method)
+	runMethodCursor  int             // cursor in the run-method picker
+	runText          string          // run-new typed buffer (a key/path/id being typed)
+	runTickets       []pendingTicket // accumulated ticket chips awaiting launch
+	runIDPrompt      int             // index of a content chip confirming its id; -1 = none
+	runImgPrompt     int             // index of a content chip attaching images; -1 = none
+	runStackPrompt   int             // index of a chip choosing its stack base; -1 = none
+	runReviewPrompt  int             // index of a chip choosing its plan-review toggle; -1 = none
+	reviewCursor     int             // cursor in the plan-review mini palette (0=Yes 1=No)
+	stackBranches    []git.Branch    // loaded once when the stack picker opens
+	stackDefault     string          // repo's default branch name (main/master/…), for the default row
+	stackFilter      string          // search filter in the stack picker
+	stackCursor      int             // cursor row in the filtered branch list
+	outputTitle      string
+	outputText       string
+	form             *formModel // active form (config/setup), nil otherwise
 
 	// full-screen plan viewer (viewPlan). planLines is the glamour-rendered
 	// markdown, pre-split into rows and re-rendered on resize; planScroll is the
@@ -462,11 +463,12 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.doAction("config")
 		}
 		// A ticket paused for plan review opens straight into the full-screen
-		// plan viewer; everything else opens the actions menu.
+		// plan viewer; any other agent row opens its own actions menu (scoped to
+		// that agent, no global commands).
 		if s := m.selected(); s != nil && s.State == store.StatePlanReview {
 			return m.doAction("view-plan")
 		}
-		return m.doAction("menu")
+		return m.doAction("agent-menu")
 	case "a":
 		return m.doAction("answer")
 	case "x":
@@ -799,7 +801,7 @@ var (
 	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
 	// hintStyle accents the "↵ actions" affordance on the selected row. Same
 	// background as selStyle so the row highlight stays continuous under it.
-	hintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Background(lipgloss.Color("236")).Bold(true)
+	hintStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Background(lipgloss.Color("236")).Bold(true)
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)

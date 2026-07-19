@@ -45,10 +45,10 @@ type runLaunchedMsg struct {
 // pendingTicket is one queued ticket in the "Start new ticket(s)" input, shown
 // as a chip. kind is content|jira.
 type pendingTicket struct {
-	id     string // ticket id (typed/confirmed; also the edit buffer while prompting)
-	title  string // parsed title (or the key itself, for a jira chip)
-	lines  int
-	kind   string   // "content" | "jira"
+	id         string // ticket id (typed/confirmed; also the edit buffer while prompting)
+	title      string // parsed title (or the key itself, for a jira chip)
+	lines      int
+	kind       string   // "content" | "jira"
 	body       string   // raw pasted content (content kind)
 	images     []string // attached image files (content kind)
 	base       string   // chosen base branch name (bare); "" = default
@@ -67,12 +67,17 @@ type paletteItem struct {
 	desc  string
 }
 
-// paletteItems is the Enter menu: the selected agent's actions first, then the
-// global commands. Rebuilt each open so it reflects the current selection/daemon.
+// paletteItems is the palette menu. Opened on a specific agent (Enter on its
+// row) it shows ONLY that agent's actions; opened as the command menu (":") it
+// shows the global commands too. Rebuilt each open so it reflects the current
+// selection/daemon.
 func (m monitorModel) paletteItems() []paletteItem {
 	var items []paletteItem
 	if s := m.selected(); s != nil {
 		items = append(items, agentActions(*s)...)
+	}
+	if m.paletteAgentOnly {
+		return items // scoped to the selected agent's actions
 	}
 	items = append(items,
 		paletteItem{"run", "Start new ticket(s)", "launch a ticket key or .md file"},

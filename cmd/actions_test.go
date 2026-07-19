@@ -57,6 +57,36 @@ func TestAgentActionsWithWorktree(t *testing.T) {
 	}
 }
 
+// A NEEDS YOU ticket's menu lists its actions in the intended order and nothing
+// else (no global commands when scoped to the agent).
+func TestNeedsYouActionOrder(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	mkWorktree(t, "NY1")
+
+	var got []string
+	for _, it := range agentActions(store.Session{Ticket: "NY1", State: "needs-you"}) {
+		got = append(got, it.key)
+	}
+	want := []string{"claude", "studio", "ship", "stop", "resume"}
+	if len(got) != len(want) {
+		t.Fatalf("needs-you actions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("action[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+
+	// Scoped agent menu shows only those actions - no globals.
+	m := monitorModel{flat: []store.Session{{Ticket: "NY1", State: "needs-you"}}, cursor: 2, paletteAgentOnly: true}
+	ids := itemIDs(m.paletteItems())
+	for _, no := range []string{"run", "doctor", "config", "setup", "quit", "daemon-start"} {
+		if ids[no] {
+			t.Errorf("scoped agent menu must not contain global %q", no)
+		}
+	}
+}
+
 func TestAgentActionsStoppedNoWorktree(t *testing.T) {
 	t.Setenv("MAGNETON_HOME", t.TempDir()) // no worktree on disk
 
