@@ -76,7 +76,7 @@ func (m monitorModel) paletteItems() []paletteItem {
 		paletteItem{"run", "Start new ticket(s)", "launch a ticket key or .md file"},
 		paletteItem{"doctor", "Doctor", "connectivity + setup health check"},
 		paletteItem{"config", "Edit config", "edit ~/.magneton/config.toml fields"},
-		paletteItem{"setup", "Setup wizard", "configure Jira, repo, and tokens"},
+		paletteItem{"setup", "Setup wizard", "configure repo, models, and token"},
 	)
 	if _, ok := daemonAlive(); ok {
 		items = append(items, paletteItem{"daemon-stop", "Stop daemon", "stop the background poller"})
@@ -915,8 +915,6 @@ func configFields(cfg *config.Config) []formField {
 		repo = cfg.Repos[0]
 	}
 	return []formField{
-		{label: "Jira base URL", value: cfg.JiraBaseURL},
-		{label: "Jira email", value: cfg.JiraEmail},
 		{label: "Repo path", value: repo.Path},
 		{label: "Branch", value: repo.Branch},
 		{label: "Base branch (e.g. main)", value: repo.Base},
@@ -927,19 +925,19 @@ func configFields(cfg *config.Config) []formField {
 }
 
 // applyConfigFields writes the (non-secret) form values back onto a config.
+// Jira settings are intentionally not shown/edited here; any values already in
+// the config file are preserved untouched.
 func applyConfigFields(cfg *config.Config, f []formField) {
 	repo := config.Repo{}
 	if len(cfg.Repos) > 0 {
 		repo = cfg.Repos[0]
 	}
-	cfg.JiraBaseURL = f[0].value
-	cfg.JiraEmail = f[1].value
-	repo.Path = f[2].value
-	repo.Branch = f[3].value
-	repo.Base = f[4].value
-	cfg.ModelPlan = f[5].value
-	cfg.ModelImpl = f[6].value
-	cfg.ModelReview = f[7].value
+	repo.Path = f[0].value
+	repo.Branch = f[1].value
+	repo.Base = f[2].value
+	cfg.ModelPlan = f[3].value
+	cfg.ModelImpl = f[4].value
+	cfg.ModelReview = f[5].value
 	cfg.Repos = []config.Repo{repo}
 }
 
@@ -973,15 +971,13 @@ func (m *monitorModel) openSetupForm() {
 	cfg, err := config.Load()
 	if err != nil {
 		cfg = &config.Config{
-			JiraBaseURL: "https://your-org.atlassian.net",
 			Concurrency: 3, PollInterval: 30, MaxBudgetUSD: 5,
 			Repos: []config.Repo{{
-				Path: "~/src/android-app", Branch: "ai/{ticket}-{slug}",
+				Path: "~/src/android-app", Branch: "{ticket}-{slug}",
 			}},
 		}
 	}
 	fields := append(configFields(cfg),
-		formField{label: "Jira API token", secret: true},
 		formField{label: "Anthropic key (blank=skip)", secret: true},
 	)
 	m.form = &formModel{
@@ -993,15 +989,12 @@ func (m *monitorModel) openSetupForm() {
 			if err != nil {
 				cfg = &config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 			}
-			n := len(f) - 2 // last two fields are the secret tokens
+			n := len(f) - 1 // last field is the secret Anthropic key
 			applyConfigFields(cfg, f[:n])
 			if err := config.Save(cfg); err != nil {
 				return formDoneMsg{err: err}
 			}
-			if tok := strings.TrimSpace(f[n].value); tok != "" {
-				_ = secrets.Set(secrets.Jira, tok)
-			}
-			if key := strings.TrimSpace(f[n+1].value); key != "" {
+			if key := strings.TrimSpace(f[n].value); key != "" {
 				_ = secrets.Set(secrets.Anthropic, key)
 			}
 			return formDoneMsg{notice: "setup saved - pick Doctor to verify"}

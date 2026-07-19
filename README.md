@@ -60,10 +60,10 @@ My company measures productivity by PRs merged. I ran Claude Code agents in para
 
 ```bash
 magneton                          # TUI dashboard: queue tickets, watch live status
-magneton init                     # configure repo, build commands, optional Jira
+magneton init                     # configure repo, branch, and per-stage models
 
-magneton run PROJ-123             # one Jira ticket → PR
-magneton run PROJ-123 PROJ-124    # two Jira tickets in parallel
+magneton run PROJ-123             # one ticket → PR
+magneton run PROJ-123 PROJ-124    # two tickets in parallel
 magneton run a.md b.md c.md       # local markdown tickets, in parallel
 
 magneton run PROJ-123 --dry-run   # skip push + PR (try this first)
@@ -71,16 +71,16 @@ magneton run PROJ-123 --resume    # re-verify a worktree you fixed by hand, then
 magneton run PROJ-123 --ship      # skip verification: commit + push + PR from your manual fix
 magneton run PROJ-124 --base ai/proj-123  # stack on another ticket's branch; PR targets it
 
-magneton doctor                   # check Jira, git, claude, gh connectivity
+magneton doctor                   # check git, claude, gh connectivity
 magneton logs PROJ-123            # print the session log for a ticket
 magneton status                   # table of all sessions
 magneton start                    # start the background daemon
 magneton stop                     # stop the daemon
 ```
 
-In the TUI, add tickets three ways: **paste** the ticket text (from Jira, Linear, anywhere; drag screenshots to attach them), enter a **Jira key**, or point at a **.md file**. Queue several, press enter, watch the dashboard.
+In the TUI, **paste** the ticket text (from Jira, Linear, anywhere; drag screenshots to attach them), confirm its id, and press enter. Queue several and watch the dashboard.
 
-Config lives at `~/.agent/config.toml`: repo path, per-stage models, branch naming, [Jira credentials](docs/jira.md) (optional; token stored in your OS keychain).
+Config lives at `~/.magneton/config.toml`: repo path, per-stage models, and branch naming.
 
 ## Cost
 
@@ -97,10 +97,10 @@ Runs on your existing Claude Code subscription or API key. No separate account, 
 ```bash
 magneton stop 2>/dev/null   # stop the daemon if it's running
 rm ~/.local/bin/magneton    # remove the binary
-rm -rf ~/.agent             # remove config, state, logs, and default worktrees
+rm -rf ~/.magneton          # remove config, state, logs, and worktrees
 ```
 
-Magneton also creates a `<your-repo>-worktrees/` folder next to your Android repo. Delete it if you don't want the leftover worktrees. If you added a Jira token, it lives in your OS keychain under `magneton`. If you built from source, also `rm -rf ~/.magneton`.
+All of magneton's data - config, state, logs, and per-ticket worktrees - lives under `~/.magneton`, so the commands above remove everything.
 
 ## License
 

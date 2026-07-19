@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -142,25 +143,34 @@ func TestStackEnterDefaultRowKeepsBaseEmpty(t *testing.T) {
 
 func TestConfigFieldsRoundTrip(t *testing.T) {
 	in := &config.Config{
-		JiraBaseURL: "https://x.atlassian.net",
-		JiraEmail:   "me@x.com",
 		Concurrency: 5,
 		ModelPlan:   "claude-opus-4-8",
 		ModelImpl:   "claude-sonnet-4-6",
 		ModelReview: "claude-haiku-4-5",
-		Repos:       []config.Repo{{Path: "/r", Branch: "b"}},
+		Repos:       []config.Repo{{Path: "/r", Branch: "b", Base: "main"}},
 	}
 	out := &config.Config{}
 	applyConfigFields(out, configFields(in))
 
-	if out.JiraBaseURL != in.JiraBaseURL || out.JiraEmail != in.JiraEmail {
-		t.Errorf("scalar round-trip failed: %+v", out)
-	}
 	if out.ModelPlan != "claude-opus-4-8" || out.ModelImpl != "claude-sonnet-4-6" || out.ModelReview != "claude-haiku-4-5" {
 		t.Errorf("model round-trip failed: plan=%q impl=%q review=%q", out.ModelPlan, out.ModelImpl, out.ModelReview)
 	}
-	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Branch != "b" {
+	if len(out.Repos) != 1 || out.Repos[0].Path != "/r" || out.Repos[0].Branch != "b" || out.Repos[0].Base != "main" {
 		t.Errorf("repo round-trip failed: %+v", out.Repos)
+	}
+}
+
+// Jira fields are no longer editable in the form, but any existing config value
+// must be preserved (not wiped) when the form is saved.
+func TestApplyConfigFieldsPreservesJira(t *testing.T) {
+	cfg := &config.Config{
+		JiraBaseURL: "https://x.atlassian.net",
+		JiraEmail:   "me@x.com",
+		Repos:       []config.Repo{{Path: "/r", Branch: "b"}},
+	}
+	applyConfigFields(cfg, configFields(cfg))
+	if cfg.JiraBaseURL != "https://x.atlassian.net" || cfg.JiraEmail != "me@x.com" {
+		t.Errorf("existing Jira config must be preserved, got base=%q email=%q", cfg.JiraBaseURL, cfg.JiraEmail)
 	}
 }
 
@@ -173,12 +183,13 @@ func TestMenuQuitIsLast(t *testing.T) {
 }
 
 func TestConfigActionOpensForm(t *testing.T) {
-	// doAction("config") with a saved config → form view with a non-nil 7-field form.
+	// doAction("config") with a saved config → form view with the 6 editable fields
+	// (repo path, branch, base, and three models - no Jira).
 	t.Setenv("MAGNETON_HOME", t.TempDir())
 	if err := paths.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.Save(&config.Config{JiraBaseURL: "u", Concurrency: 3}); err != nil {
+	if err := config.Save(&config.Config{Concurrency: 3}); err != nil {
 		t.Fatal(err)
 	}
 	mm, _ := monitorModel{}.doAction("config")
@@ -186,7 +197,12 @@ func TestConfigActionOpensForm(t *testing.T) {
 	if hub.view != viewForm || hub.form == nil {
 		t.Errorf("config should open a form view; view=%d form=%v", hub.view, hub.form)
 	}
-	if len(hub.form.fields) != 8 {
-		t.Errorf("config form should have 8 fields, got %d", len(hub.form.fields))
+	if len(hub.form.fields) != 6 {
+		t.Errorf("config form should have 6 fields, got %d", len(hub.form.fields))
+	}
+	for _, f := range hub.form.fields {
+		if strings.Contains(f.label, "Jira") {
+			t.Errorf("config form must not contain a Jira field: %q", f.label)
+		}
 	}
 }
