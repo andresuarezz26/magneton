@@ -48,6 +48,7 @@ type Plan struct {
 	Confidence    string   `json:"confidence"`     // "high" | "medium" | "low"
 	Type          string   `json:"type"`           // "bug" | "feature" | "chore"
 	NeedsEmulator bool     `json:"needs_emulator"` // true if task requires instrumentation tests
+	Diagram       string   `json:"diagram"`        // optional ASCII/mermaid diagram shown in the plan viewer
 }
 
 // Review is the .agent/review.json the self-review stage must write.
@@ -313,6 +314,12 @@ Instructions:
    - The ticket description explicitly mentions instrumentation or connected tests.
    Set needs_emulator=false for: domain layer, use cases, repositories, ViewModels,
    unit tests under test/ (not androidTest/), or pure Kotlin/Java logic.
+7. Optionally add a "diagram" that illustrates the architecture or data/navigation
+   flow of your plan. It renders as markdown in the reviewer's terminal, so use a
+   fenced code block: a plain-ASCII boxes-and-arrows diagram (most readable in a
+   terminal) or a mermaid block. ALWAYS include a diagram when the ticket or the
+   human's "Plan feedback" asks for one; otherwise include it only when it genuinely
+   aids understanding. Leave it as an empty string when not useful.
 
 Your ONLY write action is to create .agent/plan.json (create the .agent directory if needed):
 {
@@ -321,9 +328,12 @@ Your ONLY write action is to create .agent/plan.json (create the .agent director
   "questions": ["<question if truly blocking>"],
   "confidence": "high" | "medium" | "low",
   "type": "bug" | "feature" | "chore",
-  "needs_emulator": true | false
+  "needs_emulator": true | false,
+  "diagram": "<optional fenced ASCII/mermaid diagram, or empty string>"
 }
-Use an empty array for questions if you can proceed without human input.`,
+Use an empty array for questions if you can proceed without human input.
+If the human left "Plan feedback" in the ticket text, treat it as the priority:
+revise the plan to address it directly.`,
 		ticketKey, summary, desc)
 }
 

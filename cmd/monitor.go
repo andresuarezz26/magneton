@@ -804,6 +804,11 @@ var (
 	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
 	ctaSelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).Background(lipgloss.Color("231")).Bold(true).Padding(0, 1)
+
+	// Plan-viewer menu buttons: the selected one is a bright teal button, the
+	// rest are clearly muted, so the selection is obvious at a glance.
+	planBtnSel = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 2)
+	planBtn    = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("238")).Padding(0, 2)
 )
 
 func (m monitorModel) View() string {
@@ -1053,6 +1058,9 @@ func planMarkdownDoc(s store.Session) (string, bool) {
 	}
 	if strings.TrimSpace(plan.Plan) != "" {
 		fmt.Fprintf(&b, "## Approach\n\n%s\n\n", plan.Plan)
+	}
+	if strings.TrimSpace(plan.Diagram) != "" {
+		fmt.Fprintf(&b, "## Diagram\n\n%s\n\n", plan.Diagram)
 	}
 	if len(plan.Steps) > 0 {
 		b.WriteString("## Steps\n\n")
@@ -1317,16 +1325,21 @@ func (m monitorModel) renderPlan(w int) string {
 	}
 	b.WriteString(headerStyle.Render(truncate("  Plan · "+m.planTicket, w)) + dimStyle.Render(pct) + "\n")
 
-	// Action menu: two items, the selected one highlighted (dimmed while typing
-	// feedback, since the input has focus then).
+	// Action menu: two buttons. The selected one is a bright teal button; the
+	// other is muted. While typing feedback the input has focus, so highlight the
+	// "Give feedback" button as active.
 	items := []string{"Give feedback", "Approve"}
+	active := m.planMenu
+	if m.planFeedback {
+		active = 0
+	}
 	var menu strings.Builder
 	menu.WriteString("  ")
 	for i, it := range items {
-		if !m.planFeedback && i == m.planMenu {
-			menu.WriteString(selStyle.Render(" "+it+" ") + "   ")
+		if i == active {
+			menu.WriteString(planBtnSel.Render("▸ "+it) + "  ")
 		} else {
-			menu.WriteString(dimStyle.Render(" "+it+" ") + "   ")
+			menu.WriteString(planBtn.Render(it) + "  ")
 		}
 	}
 	b.WriteString(menu.String() + "\n\n")

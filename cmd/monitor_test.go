@@ -156,7 +156,7 @@ func TestPlanMarkdownDoc(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	planJSON := `{"plan":"Add topic discovery","steps":["Add topic field","Run tests"],"questions":["Which screen?"],"confidence":"high","type":"feature"}`
+	planJSON := `{"plan":"Add topic discovery","steps":["Add topic field","Run tests"],"questions":["Which screen?"],"confidence":"high","type":"feature","diagram":"` + "```" + `\nHome --> Discover\n` + "```" + `"}`
 	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +169,7 @@ func TestPlanMarkdownDoc(t *testing.T) {
 		"# K-50 · Add topics",
 		"**Confidence:** high",
 		"## Approach", "Add topic discovery",
+		"## Diagram", "Home --> Discover",
 		"## Steps", "1. Add topic field", "2. Run tests",
 		"## Open questions", "- Which screen?",
 	} {
