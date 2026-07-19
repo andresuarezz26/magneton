@@ -168,8 +168,14 @@ func Run(t Task, h Hooks) Outcome {
 	// straight from the plan.json the human already reviewed in the worktree
 	// (.agent/ is git-excluded, so it survives the branch reset on re-provision).
 	if !t.FromPlan {
-		if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts); err != nil {
+		planSID, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts)
+		if err != nil {
 			logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+		}
+		// Persist the plan session so "Open in Claude Code" on a ticket paused at
+		// the plan-review gate resumes into the planning conversation.
+		if planSID != "" && t.Store != nil {
+			_ = t.Store.SetSessionID(t.Ticket, planSID)
 		}
 	}
 

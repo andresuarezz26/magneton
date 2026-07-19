@@ -110,25 +110,19 @@ func agentActions(s store.Session) []paletteItem {
 // claudeClosedMsg is returned after launching a Claude Code terminal.
 type claudeClosedMsg struct{ err error }
 
-// interactiveOverride lifts the headless run's "do not push / do not open a PR"
-// restrictions when the user resumes the session interactively. It is passed via
-// claude's --append-system-prompt so it modifies NO file in the worktree - a
-// CLAUDE.md edit would be picked up by the chained `run --resume` commit
-// (git add -A) and pollute the user's PR.
-const interactiveOverride = "You are now in an interactive session with the user. " +
-	"Any earlier headless-mode restrictions (such as not pushing or not opening a pull request) are lifted. " +
-	"Follow the user's instructions directly, including git push or opening a PR if they ask."
-
 // openClaude opens an interactive Claude Code session in the ticket's worktree in
 // a new Terminal window. When the session has a stored ID the history is resumed
-// so the user can review what the agent did; an --append-system-prompt override
-// lifts the headless-mode restrictions. The dashboard keeps running.
+// so the user can review what the agent did. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	worktree := paths.WorktreeFor(s.Repo, s.Ticket)
 	cmdline := "cd " + shellQuote(worktree) + " && claude"
 	if s.SessionID != "" {
-		cmdline += " --resume " + shellQuote(s.SessionID) +
-			" --append-system-prompt " + shellQuote(interactiveOverride)
+		// Resumed sessions keep the model they were saved with (per Claude Code
+		// docs); "--model default" reverts to the user's/org's default so the
+		// interactive window isn't stuck on the headless stage's model. Do NOT add
+		// --append-system-prompt here: alongside --resume it drops the restored
+		// conversation history, defeating the point of resuming.
+		cmdline += " --resume " + shellQuote(s.SessionID) + " --model default"
 	}
 	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
 	// session to fix it by hand. Chain magneton's own gate+PR after the

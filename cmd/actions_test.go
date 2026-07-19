@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/andresuarezz26/magneton/internal/paths"
@@ -141,28 +140,6 @@ func TestDoActionTransitions(t *testing.T) {
 	}
 	if got.confirmCursor != 0 {
 		t.Error("stop → confirmCursor reset to 0 (Yes)")
-	}
-}
-
-// TestOpenClaudeInteractiveOverride verifies the interactive override is a
-// non-empty system-prompt string (passed via --append-system-prompt, never
-// written to a worktree file, so it can't pollute the user's PR commit).
-func TestOpenClaudeInteractiveOverride(t *testing.T) {
-	if interactiveOverride == "" {
-		t.Fatal("interactiveOverride must be a non-empty instruction")
-	}
-	if !strings.Contains(interactiveOverride, "interactive") {
-		t.Errorf("override should mention the interactive session: %q", interactiveOverride)
-	}
-	// A single-quoted shell arg must survive without breaking (no embedded
-	// single quotes that shellQuote can't handle cleanly).
-	quoted := shellQuote(interactiveOverride)
-	if !strings.HasPrefix(quoted, "'") || !strings.HasSuffix(quoted, "'") {
-		t.Errorf("override not safely shell-quoted: %q", quoted)
-	}
-	// Must be a single line so it embeds safely in the AppleScript `do script`.
-	if strings.Contains(interactiveOverride, "\n") {
-		t.Error("override must be a single line for safe terminal embedding")
 	}
 }
 
