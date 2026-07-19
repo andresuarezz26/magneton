@@ -145,14 +145,14 @@ func newGroups() []*group {
 			return s.State == "awaiting-answer" || s.State == "needs-you" ||
 				s.State == "failed" || s.State == store.StatePlanReview
 		}},
-		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
-			return s.State == store.StateStopped || isStopped(s)
-		}},
 		{label: "RUNNING", style: cyan, match: func(s store.Session) bool {
 			return isRunningState(s.State) && !isStopped(s)
 		}},
 		{label: "READY FOR REVIEW", style: green, match: func(s store.Session) bool {
 			return s.State == "review" || s.State == "merged" || s.State == "closed"
+		}},
+		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
+			return s.State == store.StateStopped || isStopped(s)
 		}},
 	}
 }
