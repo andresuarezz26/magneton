@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/andresuarezz26/magneton/internal/build"
 	"github.com/andresuarezz26/magneton/internal/config"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
@@ -123,5 +124,26 @@ func TestResolveBranch(t *testing.T) {
 		if got := resolveBranch(c.pattern, c.ticket, c.summary); got != c.want {
 			t.Errorf("%s: resolveBranch(%q) = %q, want %q", name, c.pattern, got, c.want)
 		}
+	}
+}
+
+// resolveAVD prefers the configured avd_name and never shells out for it; with
+// no config it auto-detects (returns "" here since no emulator binary/AVDs exist
+// in the test environment).
+func TestResolveAVD(t *testing.T) {
+	var logged bool
+	logf := func(string, ...interface{}) { logged = true }
+
+	// Configured name wins - returned as-is, no `emulator -list-avds` call.
+	if got := resolveAVD("Pixel_6", build.SDKPaths{Emulator: "/no/such/emulator"}, logf); got != "Pixel_6" {
+		t.Errorf("configured: got %q, want Pixel_6", got)
+	}
+	if logged {
+		t.Error("configured avd should not log an auto-detect line")
+	}
+
+	// No config + no emulator binary → "" (caller falls back to unit tests).
+	if got := resolveAVD("", build.SDKPaths{Emulator: "/no/such/emulator"}, logf); got != "" {
+		t.Errorf("auto-detect with no emulator: got %q, want \"\"", got)
 	}
 }

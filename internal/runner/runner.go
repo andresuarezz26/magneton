@@ -196,14 +196,18 @@ func Run(t Task, h Hooks) Outcome {
 
 	// Start emulator in the background, concurrent with the implement stage.
 	// We do this right after reading the plan so boot time overlaps with Claude.
-	needsEmu := plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
 	sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+	avdName := ""
+	if plan.NeedsEmulator {
+		avdName = resolveAVD(t.Cfg.AVDName, sdkPaths, logf)
+	}
+	needsEmu := avdName != "" && t.Store != nil
 	var emulatorReady chan error
 	if needsEmu {
-		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		_ = t.Store.RegisterEmulator(avdName)
 		emulatorReady = make(chan error, 1)
-		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, emulatorReady)
-		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, t.Cfg.AVDName, sdkPaths.ADB)
+		go bootOrWait(avdName, sdkPaths, t.Store, logf, emulatorReady)
+		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, avdName, sdkPaths.ADB)
 	}
 
 	// 3. CLARIFY - always post plan to Jira; stop if there are blocking questions.
@@ -320,14 +324,14 @@ func Run(t Task, h Hooks) Outcome {
 			needsEmu = false
 		} else {
 			for {
-				ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket)
+				ok, _ := t.Store.AcquireEmulator(avdName, t.Ticket)
 				if ok {
 					break
 				}
 				logf("[%s] emulator busy, waiting…", t.Ticket)
 				time.Sleep(5 * time.Second)
 			}
-			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+			defer func() { _ = t.Store.ReleaseEmulator(avdName) }()
 			logf("[%s] emulator acquired", t.Ticket)
 		}
 	}
@@ -561,27 +565,31 @@ func resumeShip(t Task, h Hooks) Outcome {
 	plan, _ := agent.ReadPlan(worktree)
 	report, _ := agent.ReadReport(worktree)
 
-	needsEmu := plan != nil && plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
+	sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+	avdName := ""
+	if plan != nil && plan.NeedsEmulator {
+		avdName = resolveAVD(t.Cfg.AVDName, sdkPaths, logf)
+	}
+	needsEmu := avdName != "" && t.Store != nil
 
 	// Boot + acquire the emulator only if the original plan needed instrumented tests.
 	if needsEmu {
-		sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
-		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		_ = t.Store.RegisterEmulator(avdName)
 		ready := make(chan error, 1)
-		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, ready)
+		go bootOrWait(avdName, sdkPaths, t.Store, logf, ready)
 		logf("[%s] waiting for emulator…", t.Ticket)
 		if err := <-ready; err != nil {
 			logf("[%s] (warn) emulator unavailable: %v - falling back to unit tests", t.Ticket, err)
 			needsEmu = false
 		} else {
 			for {
-				if ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket); ok {
+				if ok, _ := t.Store.AcquireEmulator(avdName, t.Ticket); ok {
 					break
 				}
 				logf("[%s] emulator busy, waiting…", t.Ticket)
 				time.Sleep(5 * time.Second)
 			}
-			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+			defer func() { _ = t.Store.ReleaseEmulator(avdName) }()
 		}
 	}
 	anthropicKey := secrets.Get(secrets.Anthropic)
@@ -660,6 +668,23 @@ func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(strin
 // bootOrWait either reuses an already-running emulator, starts a new one, or
 // waits for another runner that is already booting it. It sends exactly one
 // value on done when the emulator reaches state=ready or on error.
+// resolveAVD picks the AVD to use for instrumented tests: the configured one
+// (config avd_name) when set, otherwise the first AVD found via
+// `emulator -list-avds` - so instrumented tests work with zero config for anyone
+// who has at least one AVD. Returns "" when none is available (the caller then
+// falls back to unit tests).
+func resolveAVD(configured string, p build.SDKPaths, logf func(string, ...interface{})) string {
+	if configured != "" {
+		return configured
+	}
+	avds := build.ListAVDs(p)
+	if len(avds) == 0 {
+		return ""
+	}
+	logf("[emulator] no avd_name configured - auto-detected AVD %q", avds[0])
+	return avds[0]
+}
+
 func bootOrWait(avdName string, p build.SDKPaths, st *store.Store, logf func(string, ...interface{}), done chan<- error) {
 	// If any emulator is already attached via adb, skip booting entirely.
 	if build.AlreadyRunning(p) {
