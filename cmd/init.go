@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,16 +12,13 @@ import (
 	"golang.org/x/term"
 
 	"github.com/andresuarezz26/magneton/internal/config"
-	"github.com/andresuarezz26/magneton/internal/jira"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 	"github.com/andresuarezz26/magneton/internal/vcs"
 )
 
 // Non-interactive fallback (CI / piped stdin): a commented config to edit by hand.
-const sampleConfig = `# magneton config - ~/.agent/config.toml
-jira_base_url = "https://your-org.atlassian.net"
-jira_email    = "you@your-org.com"
+const sampleConfig = `# magneton config - ~/.magneton/config.toml
 poll_interval = 30
 concurrency   = 3
 max_budget_usd = 5
@@ -45,7 +43,7 @@ max_budget_usd = 5
 
 [[repo]]
 path        = "~/src/android-app"
-branch      = "ai/{ticket}-{slug}"
+branch      = "{ticket}-{slug}"
 # base      = "main"
 # Build/test commands are intentionally not configured: the agent discovers and
 # runs verification itself (handles per-project setups and company build skills).
@@ -98,13 +96,31 @@ func wizard() error {
 	fmt.Println("\nmagneton setup\n────────────────")
 	cfg := config.Config{PollInterval: 30, Concurrency: 3, MaxBudgetUSD: 5}
 
-	// Required: repo settings. Build/test commands are no longer asked - the agent
-	// discovers and runs verification itself.
-	repo := config.Repo{
-		Path:   ask(r, "Repository path", "~/src/android-app"),
-		Branch: ask(r, "Branch pattern", "ai/{ticket}-{slug}"),
+	// Required: repo path. Pre-fill with the current directory (where the user
+	// most likely ran `magneton init` from), editable in place.
+	pwd, _ := os.Getwd()
+	if pwd == "" {
+		pwd = "~/src/android-app"
 	}
+	fmt.Println("\n  Repository path — the Android project magneton works on.")
+	fmt.Println("  Pre-filled with this directory; edit it if your project lives elsewhere.")
+	repoPath := ask(r, "Repository path", pwd)
+	if expanded := config.Expand(repoPath); expanded != "" {
+		if _, err := os.Stat(expanded); os.IsNotExist(err) {
+			fmt.Println("  (warn) that path doesn't exist yet — update it in", paths.Config(), "before running magneton")
+		}
+	}
+
+	// Branch pattern, pre-filled with the default so the user can accept or tweak.
+	printBranchHelp()
+	branchPattern := ask(r, "Branch pattern (press Enter for default)", "{ticket}-{slug}")
+
+	repo := config.Repo{Path: repoPath, Branch: branchPattern}
 	cfg.Repos = []config.Repo{repo}
+
+	// Plan-review gate default: pause each ticket after planning so the human can
+	// approve or give feedback before implementation begins.
+	cfg.ReviewPlans = askYesNo(r, "Pause each ticket for plan review before implementing?", false)
 
 	// Optional: per-stage models. Blank inherits whatever default Claude Code is
 	// configured with (respecting org policy), so most users can skip these.
@@ -119,19 +135,6 @@ func wizard() error {
 	if tok := askSecret("Anthropic API key [optional - blank = use logged-in claude]"); tok != "" {
 		_ = secrets.Set(secrets.Anthropic, tok)
 		fmt.Println("  → saved to OS keychain")
-	}
-
-	// Optional: Jira integration.
-	fmt.Println("\n  - Jira integration [optional] ----------------------")
-	fmt.Println("  Skip these to run tickets from local .md files only.")
-	cfg.JiraBaseURL = strings.TrimRight(ask(r, "Jira base URL [optional]", ""), "/")
-	cfg.JiraEmail = ask(r, "Jira email [optional]", "")
-	if tok := askSecret("Jira API token [optional]"); tok != "" {
-		if err := secrets.Set(secrets.Jira, tok); err != nil {
-			fmt.Println("  (warn) could not store Jira token in keychain:", err)
-		} else {
-			fmt.Println("  → saved to OS keychain")
-		}
 	}
 
 	// Telemetry consent.
@@ -153,10 +156,6 @@ func wizard() error {
 	report("git remote (origin)", checkGitRemote(config.Expand(repo.Path)))
 	report("claude CLI", exec.Command("claude", "--version").Run())
 	report("gh CLI", exec.Command("gh", "auth", "status").Run())
-	if cfg.JiraBaseURL != "" {
-		jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-		report("Jira", jc.Verify())
-	}
 
 	fmt.Println("\nReady. Try:  magneton run ./ticket.md --dry-run")
 	return nil
@@ -178,18 +177,146 @@ func checkGitRemote(repoPath string) error {
 	return nil
 }
 
+// printBranchHelp explains the branch-naming placeholders and shows a few
+// worked examples before the wizard asks for the pattern.
+func printBranchHelp() {
+	fmt.Println("\n  Branch naming pattern")
+	fmt.Println("  Build your team's pattern using these placeholders:")
+	fmt.Println()
+	fmt.Println("    {ticket}   Ticket ID, lowercase       e.g. ticket-1")
+	fmt.Println("    {slug}     Ticket title, kebab-case   e.g. add-pull-to-refresh")
+	fmt.Println()
+	fmt.Println("  Examples for TICKET-1 — \"Add pull to refresh\":")
+	fmt.Println()
+	fmt.Println("    {ticket}-{slug}     ticket-1-add-pull-to-refresh")
+	fmt.Println("    feature/{ticket}    feature/ticket-1")
+	fmt.Println("    {ticket}/{slug}     ticket-1/add-pull-to-refresh")
+	fmt.Println()
+}
+
+// ask prompts for a value, pre-filling the field with def so the user can edit
+// it in place (arrow keys work) rather than retype it. Submitting an empty line
+// still falls back to def.
 func ask(r *bufio.Reader, label, def string) string {
-	if def != "" {
-		fmt.Printf("? %s [%s]: ", label, def)
-	} else {
-		fmt.Printf("? %s: ", label)
-	}
-	line, _ := r.ReadString('\n')
-	line = strings.TrimSpace(line)
+	line := readLine(r, "? "+label+": ", def)
 	if line == "" {
 		return def
 	}
 	return line
+}
+
+// readLine reads one line with basic left/right cursor editing (←/→, Home/End,
+// Backspace, Delete) by putting the terminal in raw mode for the read. initial
+// pre-fills the editable buffer. Falls back to a plain buffered read when stdin
+// is not an interactive terminal or raw mode can't be set. Any leading lines in
+// prompt (before the last "\n") are printed as a static header so the editable
+// prompt stays a single line.
+func readLine(in *bufio.Reader, prompt, initial string) string {
+	static, edit := "", prompt
+	if i := strings.LastIndex(prompt, "\n"); i >= 0 {
+		static, edit = prompt[:i+1], prompt[i+1:]
+	}
+	if static != "" {
+		fmt.Print(static)
+	}
+
+	fd := int(os.Stdin.Fd())
+	oldState, err := (*term.State)(nil), error(nil)
+	if term.IsTerminal(fd) {
+		oldState, err = term.MakeRaw(fd)
+	}
+	if oldState == nil || err != nil {
+		// Not a TTY (piped/redirected) or raw mode unavailable: plain read.
+		// Pre-fill can't be edited here, so ask()'s empty→def fallback covers it.
+		fmt.Print(edit)
+		line, _ := in.ReadString('\n')
+		return strings.TrimSpace(line)
+	}
+	defer term.Restore(fd, oldState)
+
+	line, abort := editLine(in, os.Stdout, edit, initial)
+	if abort {
+		term.Restore(fd, oldState)
+		os.Exit(130)
+	}
+	return line
+}
+
+// editLine runs the raw-mode line-editing loop: it reads runes from in, echoes
+// the edited line to out, and returns the trimmed result. abort is true when the
+// user pressed ctrl-c. It is independent of terminal setup so it can be tested
+// with synthetic input.
+func editLine(in io.RuneReader, out io.Writer, edit, initial string) (result string, abort bool) {
+	buf := []rune(initial)
+	pos := len(buf)
+	redraw := func() {
+		fmt.Fprint(out, "\r"+edit+string(buf)+"\x1b[K")
+		if back := len(buf) - pos; back > 0 {
+			fmt.Fprintf(out, "\x1b[%dD", back)
+		}
+	}
+	redraw()
+	for {
+		rn, _, err := in.ReadRune()
+		if err != nil {
+			break
+		}
+		switch {
+		case rn == '\r' || rn == '\n':
+			fmt.Fprint(out, "\r\n")
+			return strings.TrimSpace(string(buf)), false
+		case rn == 3: // ctrl-c
+			fmt.Fprint(out, "\r\n")
+			return "", true
+		case rn == 127 || rn == 8: // backspace
+			if pos > 0 {
+				buf = append(buf[:pos-1], buf[pos:]...)
+				pos--
+			}
+		case rn == 27: // ESC: arrow/navigation sequence
+			b1, _, err := in.ReadRune()
+			if err != nil || (b1 != '[' && b1 != 'O') {
+				break
+			}
+			b2, _, err := in.ReadRune()
+			if err != nil {
+				break
+			}
+			switch b2 {
+			case 'D': // left
+				if pos > 0 {
+					pos--
+				}
+			case 'C': // right
+				if pos < len(buf) {
+					pos++
+				}
+			case 'H': // home
+				pos = 0
+			case 'F': // end
+				pos = len(buf)
+			case '3': // delete: ESC [ 3 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' && pos < len(buf) {
+					buf = append(buf[:pos], buf[pos+1:]...)
+				}
+			case '1', '7': // home variants: ESC [ 1 ~ / 7 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' {
+					pos = 0
+				}
+			case '4', '8': // end variants: ESC [ 4 ~ / 8 ~
+				if b3, _, err := in.ReadRune(); err == nil && b3 == '~' {
+					pos = len(buf)
+				}
+			}
+		case rn >= 32: // printable rune: insert at cursor
+			buf = append(buf, 0)
+			copy(buf[pos+1:], buf[pos:])
+			buf[pos] = rn
+			pos++
+		}
+		redraw()
+	}
+	return strings.TrimSpace(string(buf)), false
 }
 
 func askSecret(label string) string {
@@ -204,9 +331,7 @@ func askYesNo(r *bufio.Reader, label string, def bool) bool {
 	if def {
 		suffix = "[Y/n]"
 	}
-	fmt.Printf("? %s %s: ", label, suffix)
-	line, _ := r.ReadString('\n')
-	line = strings.ToLower(strings.TrimSpace(line))
+	line := strings.ToLower(readLine(r, "? "+label+" "+suffix+": ", ""))
 	if line == "" {
 		return def
 	}

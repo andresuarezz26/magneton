@@ -8,7 +8,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
@@ -40,7 +42,7 @@ func init() {
 // launchHub opens the TUI hub. Shared by bare `agent` and `agent monitor`/`top`.
 func launchHub() error {
 	if err := paths.EnsureDirs(); err != nil {
-		return fmt.Errorf("cannot create ~/.agent directory: %w\nRun `magneton init` to configure your setup", err)
+		return fmt.Errorf("cannot create ~/.magneton directory: %w\nRun `magneton init` to configure your setup", err)
 	}
 	st, err := store.Open(paths.StateDB())
 	if err != nil {
@@ -76,7 +78,7 @@ func launchHub() error {
 
 	m := monitorModel{
 		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
-		runIDPrompt: -1, runImgPrompt: -1, runStackPrompt: -1,
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1, runStackPrompt: -1, runReviewPrompt: -1,
 	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -135,22 +137,23 @@ type group struct {
 }
 
 func newGroups() []*group {
-	red := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	orange := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	green := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	red := lipgloss.NewStyle().Foreground(colorNeedsYou).Bold(true)
+	orange := lipgloss.NewStyle().Foreground(colorAttn).Bold(true)
+	cyan := lipgloss.NewStyle().Foreground(colorRunning).Bold(true)
+	green := lipgloss.NewStyle().Foreground(colorReview).Bold(true)
 	return []*group{
 		{label: "NEEDS YOU", style: red, match: func(s store.Session) bool {
-			return s.State == "awaiting-answer" || s.State == "needs-you" || s.State == "failed"
-		}},
-		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
-			return s.State == store.StateStopped || isStopped(s)
+			return s.State == "awaiting-answer" || s.State == "needs-you" ||
+				s.State == "failed" || s.State == store.StatePlanReview
 		}},
 		{label: "RUNNING", style: cyan, match: func(s store.Session) bool {
 			return isRunningState(s.State) && !isStopped(s)
 		}},
-		{label: "UNDER REVIEW", style: green, match: func(s store.Session) bool {
+		{label: "READY FOR REVIEW", style: green, match: func(s store.Session) bool {
 			return s.State == "review" || s.State == "merged" || s.State == "closed"
+		}},
+		{label: "STOPPED", style: orange, match: func(s store.Session) bool {
+			return s.State == store.StateStopped || isStopped(s)
 		}},
 	}
 }
@@ -160,7 +163,7 @@ func glyphFor(s store.Session) string {
 		return "■"
 	}
 	switch s.State {
-	case "awaiting-answer":
+	case "awaiting-answer", store.StatePlanReview:
 		return "▮"
 	case "failed":
 		return "✗"
@@ -182,6 +185,9 @@ func stateLabel(s store.Session) string {
 	if s.State == store.StateReview {
 		return "under review"
 	}
+	if s.State == store.StatePlanReview {
+		return "plan ready"
+	}
 	return s.State
 }
 
@@ -200,31 +206,60 @@ type monitorModel struct {
 	lastRefresh time.Time
 	err         error
 
-	// answer-and-resume mode
-	answering bool
-	input     string
-	answerKey string
-	notice    string // transient status/error line under the footer
+	// answer-and-resume mode. The answer is an ordered list of atoms - typed
+	// runes and pasted blobs interleaved - so a paste shows inline as
+	// "[N lines added]" right where the cursor was, exactly like Claude Code.
+	answering    bool
+	answerKey    string
+	answerAtoms  []inputAtom // typed chars + paste placeholders, in order
+	answerCursor int         // index into answerAtoms (0..len)
+	notice       string      // transient status/error line under the footer
 
-	// stop/cleanup confirmation; non-empty = awaiting y/n for this ticket
-	confirming string
+	// stop/cleanup confirmation; non-empty = awaiting selection for this ticket
+	confirming    string
+	confirmCursor int // 0 = "Yes, stop" / 1 = "No, keep running"
 
 	// hub views (palette / run-input / doctor output / form). dashboard = zero value.
-	view            hubView
-	paletteCursor   int
-	runMode         string          // "" | content | jira | file (active run-input method)
-	runMethodCursor int             // cursor in the run-method picker
-	runText         string          // run-new typed buffer (a key/path/id being typed)
-	runTickets      []pendingTicket // accumulated ticket chips awaiting launch
-	runIDPrompt     int             // index of a content chip confirming its id; -1 = none
-	runImgPrompt    int             // index of a content chip attaching images; -1 = none
-	runStackPrompt  int             // index of a chip choosing its stack base; -1 = none
-	stackBranches   []git.Branch    // loaded once when the stack picker opens
-	stackFilter     string          // search filter in the stack picker
-	stackCursor     int             // cursor row in the filtered branch list
-	outputTitle     string
-	outputText      string
-	form            *formModel // active form (config/setup), nil otherwise
+	view             hubView
+	paletteCursor    int
+	paletteAgentOnly bool            // palette scoped to the selected agent (no global commands)
+	runMode          string          // "" | content | jira | file (active run-input method)
+	runMethodCursor  int             // cursor in the run-method picker
+	runText          string          // run-new typed buffer (a key/path/id being typed)
+	runTickets       []pendingTicket // accumulated ticket chips awaiting launch
+	runIDPrompt      int             // index of a content chip confirming its ticket id; -1 = none
+	runBranchPrompt  int             // index of a content chip confirming its branch name; -1 = none
+	runImgPrompt     int             // index of a content chip attaching images; -1 = none
+	runStackPrompt   int             // index of a chip choosing its stack base; -1 = none
+	runReviewPrompt  int             // index of a chip choosing its plan-review toggle; -1 = none
+	reviewCursor     int             // cursor in the plan-review mini palette (0=Yes 1=No)
+	ticketLines      []string        // glamour-rendered ticket markdown (id/branch prompts + editor preview)
+	ticketScroll     int             // top visible row of ticketLines
+	promptCursor     int             // caret rune-index in the active id/branch prompt field
+	content          *textarea.Model // multi-line markdown editor for content mode; nil when inactive
+	contentPreview   bool            // content mode is showing the glamour preview instead of the editor
+	contentBar       bool            // focus is on the editor's action bar (Esc steps out to it)
+	contentBtn       int             // selected action-bar button (0=Continue 1=Preview 2=Discard)
+	stackBranches    []git.Branch    // loaded once when the stack picker opens
+	stackDefault     string          // repo's default branch name (main/master/…), for the default row
+	stackFilter      string          // search filter in the stack picker
+	stackCursor      int             // cursor row in the filtered branch list
+	outputTitle      string
+	outputText       string
+	form             *formModel // active form (config/setup), nil otherwise
+
+	// full-screen plan viewer (viewPlan). planLines is the glamour-rendered
+	// markdown, pre-split into rows and re-rendered on resize; planScroll is the
+	// top visible row. planMenu is the top action selection (0=feedback 1=approve).
+	// When planFeedback is on, an inline input lets the user type corrections while
+	// the plan stays visible above.
+	planTicket   string
+	planScroll   int
+	planLines    []string
+	planMenu     int
+	planFeedback bool
+	planFbAtoms  []inputAtom
+	planFbCursor int
 }
 
 // answerDoneMsg is returned by submitAnswer once the answer is written and the
@@ -292,10 +327,45 @@ func (m *monitorModel) selected() *store.Session {
 	return &m.flat[m.cursor-2]
 }
 
+// sessionByTicket returns the session with the given ticket id, or nil.
+func (m *monitorModel) sessionByTicket(ticket string) *store.Session {
+	for i := range m.flat {
+		if m.flat[i].Ticket == ticket {
+			return &m.flat[i]
+		}
+	}
+	return nil
+}
+
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Re-wrap the open plan for the new width (glamour bakes the wrap in).
+		if m.view == viewPlan {
+			if s := m.sessionByTicket(m.planTicket); s != nil {
+				if md, ok := planMarkdownDoc(*s); ok {
+					m.planLines = renderMarkdownLines(md, m.paneWidth())
+				}
+			}
+		}
+		// Same for the pasted ticket shown behind the id/branch prompts.
+		promptIdx := m.runIDPrompt
+		if promptIdx < 0 {
+			promptIdx = m.runBranchPrompt
+		}
+		if promptIdx >= 0 && promptIdx < len(m.runTickets) {
+			m.ticketLines = renderMarkdownLines(m.runTickets[promptIdx].body, m.paneWidth())
+			m.clampTicketScroll()
+		}
+		// And the content editor / its markdown preview.
+		if m.content != nil {
+			m.sizeContentEditor()
+			if m.contentPreview {
+				m.ticketLines = renderMarkdownLines(m.content.Value(), m.paneWidth())
+				m.clampTicketScroll()
+			}
+		}
 	case tickMsg:
 		m.reload()
 		return m, tick()
@@ -335,6 +405,8 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.view = viewDashboard
 		return m, nil
+	case ticketEditedMsg:
+		return m.applyTicketEdit(msg)
 	case runLaunchedMsg:
 		if msg.err != nil {
 			m.notice = "run failed: " + msg.err.Error()
@@ -350,11 +422,18 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "daemon " + msg.action + "ed"
 		}
 		return m, nil
+	case planOpenedMsg:
+		if msg.err != nil {
+			m.notice = "view plan: " + msg.err.Error()
+		} else {
+			m.notice = "opened " + msg.path
+		}
+		return m, nil
 	case claudeClosedMsg:
 		if msg.err != nil {
 			m.notice = "open Claude Code: " + msg.err.Error()
 		} else {
-			m.notice = "opened Claude Code in a new terminal"
+			m.notice = "opened Claude Code in a new window"
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -385,6 +464,8 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateRunInput(msg)
 	case viewOutput:
 		return m.updateOutput(msg)
+	case viewPlan:
+		return m.updatePlan(msg)
 	case viewForm:
 		return m.updateForm(msg)
 	}
@@ -416,7 +497,13 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor == 1 {
 			return m.doAction("config")
 		}
-		return m.doAction("menu")
+		// A ticket paused for plan review opens straight into the full-screen
+		// plan viewer; any other agent row opens its own actions menu (scoped to
+		// that agent, no global commands).
+		if s := m.selected(); s != nil && s.State == store.StatePlanReview {
+			return m.doAction("view-plan")
+		}
+		return m.doAction("agent-menu")
 	case "a":
 		return m.doAction("answer")
 	case "x":
@@ -427,12 +514,13 @@ func (m monitorModel) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateConfirming handles the y/n stop-confirmation prompt.
+// updateConfirming handles the palette-style stop-confirmation prompt.
+// ↑/↓ moves the cursor; Enter selects; y/n are kept for backwards compat.
 func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
+	confirmYes := func() (tea.Model, tea.Cmd) {
 		key := m.confirming
 		m.confirming = ""
+		m.confirmCursor = 0
 		var target *store.Session
 		for i := range m.flat {
 			if m.flat[i].Ticket == key {
@@ -445,10 +533,42 @@ func (m monitorModel) updateConfirming(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.notice = "stopping " + key + "…"
 		return m, m.cancelAgent(*target)
+	}
+	switch msg.String() {
+	case "up", "k":
+		m.confirmCursor = 0
+	case "down", "j":
+		m.confirmCursor = 1
+	case "enter":
+		if m.confirmCursor == 0 {
+			return confirmYes()
+		}
+		m.confirming = ""
+		m.confirmCursor = 0
+	case "y", "Y":
+		return confirmYes()
 	case "n", "N", "esc", "q":
 		m.confirming = ""
+		m.confirmCursor = 0
 	}
 	return m, nil
+}
+
+// renderConfirm renders the palette-style stop-confirmation view.
+func (m monitorModel) renderConfirm(w int) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("  Stop "+m.confirming+"?") + "\n")
+	b.WriteString(dimStyle.Render("  kills the process and removes the worktree") + "\n\n")
+	items := []string{"Yes, stop and clean up", "No, keep running"}
+	for i, item := range items {
+		if i == m.confirmCursor {
+			b.WriteString(selStyle.Render(" "+item) + "\n")
+		} else {
+			b.WriteString("  " + item + "\n")
+		}
+	}
+	return b.String()
 }
 
 // pauseAgent halts a live run: it kills the driving process (and its process
@@ -489,29 +609,100 @@ func (m monitorModel) cancelAgent(s store.Session) tea.Cmd {
 	}
 }
 
+// pasteInlineMaxRunes is the cutoff below which a single-line paste is dropped
+// in as literal typed text instead of a collapsed "[1 line added]" chip.
+const pasteInlineMaxRunes = 100
+
+// inputAtom is one unit of the answer input. A typed character carries a rune;
+// a paste carries its whole body in blob (and r is zero). Each atom is a single
+// cursor stop, so backspace over a paste removes the entire "[N lines added]"
+// chunk at once - matching Claude Code's paste-as-one-token behaviour.
+type inputAtom struct {
+	r    rune   // typed character (when blob == "")
+	blob string // pasted body (when non-empty)
+}
+
+// answerText reassembles the atoms into the string sent to the agent: typed
+// runes verbatim, pastes expanded to their full body in place.
+func answerText(atoms []inputAtom) string {
+	var b strings.Builder
+	for _, a := range atoms {
+		if a.blob != "" {
+			b.WriteString(a.blob)
+		} else {
+			b.WriteRune(a.r)
+		}
+	}
+	return b.String()
+}
+
+// insertAtom inserts one atom at the cursor and returns the advanced cursor.
+func insertAtom(atoms []inputAtom, cursor int, a inputAtom) ([]inputAtom, int) {
+	out := make([]inputAtom, 0, len(atoms)+1)
+	out = append(out, atoms[:cursor]...)
+	out = append(out, a)
+	out = append(out, atoms[cursor:]...)
+	return out, cursor + 1
+}
+
 // updateAnswering handles keystrokes while the answer input box is open.
 func (m monitorModel) updateAnswering(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Bracketed paste arrives as a KeyMsg with Paste=true regardless of Type.
+	// Drop it in as a single atom at the cursor - it renders inline as
+	// "[N lines added]" and stays one deletable unit.
+	if msg.Paste {
+		blob := normalizeNewlines(string(msg.Runes))
+		if blob == "" {
+			return m, nil
+		}
+		// A short single-line paste (a URL, an identifier, a phrase) reads better
+		// dropped in as literal text than hidden behind an "[1 line added]" chip.
+		// Anything multi-line or long stays a collapsed paste atom.
+		if oneLine := strings.TrimRight(blob, "\n"); !strings.Contains(oneLine, "\n") && len([]rune(oneLine)) <= pasteInlineMaxRunes {
+			for _, ch := range oneLine {
+				m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ch})
+			}
+		} else {
+			m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{blob: blob})
+		}
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyEnter:
-		if strings.TrimSpace(m.input) == "" {
+		full := strings.TrimSpace(answerText(m.answerAtoms))
+		if full == "" {
 			m.answering = false
 			return m, nil
 		}
-		key, answer := m.answerKey, m.input
+		key := m.answerKey
 		m.answering = false
+		m.answerAtoms = nil
+		m.answerCursor = 0
 		m.notice = "sending answer to " + key + "…"
-		return m, m.submitAnswer(key, answer)
+		return m, m.submitAnswer(key, full)
 	case tea.KeyEsc:
 		m.answering = false
-		m.input = ""
+		m.answerAtoms = nil
+		m.answerCursor = 0
+	case tea.KeyLeft:
+		if m.answerCursor > 0 {
+			m.answerCursor--
+		}
+	case tea.KeyRight:
+		if m.answerCursor < len(m.answerAtoms) {
+			m.answerCursor++
+		}
 	case tea.KeyBackspace:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
+		if m.answerCursor > 0 {
+			m.answerAtoms = append(m.answerAtoms[:m.answerCursor-1], m.answerAtoms[m.answerCursor:]...)
+			m.answerCursor--
 		}
 	case tea.KeySpace:
-		m.input += " "
+		m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ' '})
 	case tea.KeyRunes:
-		m.input += string(msg.Runes)
+		for _, ch := range msg.Runes {
+			m.answerAtoms, m.answerCursor = insertAtom(m.answerAtoms, m.answerCursor, inputAtom{r: ch})
+		}
 	default:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -527,9 +718,11 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 	self, st := m.selfPath, m.store
 	return func() tea.Msg {
 		var sourcePath string
+		reviewPlan := false
 		if st != nil {
 			if sess, err := st.Get(key); err == nil && sess != nil {
 				sourcePath = sess.SourcePath
+				reviewPlan = sess.ReviewPlan
 			}
 		}
 		if sourcePath == "" {
@@ -543,7 +736,47 @@ func (m monitorModel) submitAnswer(key, answer string) tea.Cmd {
 		if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
 			return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
 		}
-		c := exec.Command(self, "run", sourcePath)
+		// Keep the plan-review gate across the re-run: a ticket that paused for the
+		// plan should pause again after re-planning on the answered version.
+		args := []string{"run", sourcePath}
+		if reviewPlan {
+			args = append(args, "--review-plan")
+		}
+		c := exec.Command(self, args...)
+		c.Stdout, c.Stderr = nil, nil
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Start(); err != nil {
+			return answerDoneMsg{ticket: key, err: err}
+		}
+		return answerDoneMsg{ticket: key}
+	}
+}
+
+// submitPlanFeedback appends the human's feedback to the .md source and re-runs
+// with --review-plan so the agent re-plans and pauses again for another review.
+// Same local-tickets-only limitation as submitAnswer (pasted tickets always have
+// a SourcePath, so the primary flow is covered).
+func (m monitorModel) submitPlanFeedback(key, feedback string) tea.Cmd {
+	self, st := m.selfPath, m.store
+	return func() tea.Msg {
+		var sourcePath string
+		if st != nil {
+			if sess, err := st.Get(key); err == nil && sess != nil {
+				sourcePath = sess.SourcePath
+			}
+		}
+		if sourcePath == "" {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("plan feedback via TUI only works for local .md tickets - use \"Open in Claude Code\" to give feedback in the session")}
+		}
+		raw, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("read %s: %w", sourcePath, err)}
+		}
+		updated := strings.TrimSpace(string(raw)) + "\n\n---\nPlan feedback:\n" + feedback
+		if err := os.WriteFile(sourcePath, []byte(updated+"\n"), 0o644); err != nil {
+			return answerDoneMsg{ticket: key, err: fmt.Errorf("write %s: %w", sourcePath, err)}
+		}
+		c := exec.Command(self, "run", sourcePath, "--review-plan")
 		c.Stdout, c.Stderr = nil, nil
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := c.Start(); err != nil {
@@ -597,14 +830,39 @@ func (m monitorModel) renderConsent(w int) string {
 
 // ---- view ------------------------------------------------------------------
 
+// Color palette - one place for every color so styles compose from named roles
+// instead of scattering raw 256-color codes. Add to this, don't invent new
+// literals at the call site.
+var (
+	colorPrimary  = lipgloss.Color("36")  // teal: CTAs, primary buttons, editable values
+	colorText     = lipgloss.Color("231") // bright white text
+	colorSubtle   = lipgloss.Color("250") // light gray (field labels)
+	colorMuted    = lipgloss.Color("245") // dim gray (hints, secondary text)
+	colorSep      = lipgloss.Color("240") // separators
+	colorSelBg    = lipgloss.Color("236") // selection background
+	colorMutedBg  = lipgloss.Color("238") // muted button background
+	colorNeedsYou = lipgloss.Color("203") // red    - NEEDS YOU group / errors
+	colorRunning  = lipgloss.Color("39")  // cyan   - RUNNING group
+	colorReview   = lipgloss.Color("42")  // green  - READY FOR REVIEW group
+	colorAttn     = lipgloss.Color("214") // orange - STOPPED group / warnings / hints
+)
+
 var (
 	headerStyle = lipgloss.NewStyle().Bold(true)
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	selStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("236"))
-	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	whyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	ctaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("36")).Bold(true).Padding(0, 1)
-	ctaSelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).Background(lipgloss.Color("231")).Bold(true).Padding(0, 1)
+	dimStyle    = lipgloss.NewStyle().Foreground(colorMuted)
+	selStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorSelBg)
+	// hintStyle accents the "↵ actions" affordance on the selected row. Same
+	// background as selStyle so the row highlight stays continuous under it.
+	hintStyle   = lipgloss.NewStyle().Foreground(colorAttn).Background(colorSelBg).Bold(true)
+	sepStyle    = lipgloss.NewStyle().Foreground(colorSep)
+	whyStyle    = lipgloss.NewStyle().Foreground(colorAttn).Bold(true)
+	ctaStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorPrimary).Bold(true).Padding(0, 1)
+	ctaSelStyle = lipgloss.NewStyle().Foreground(colorPrimary).Background(colorText).Bold(true).Padding(0, 1)
+
+	// Plan-viewer menu buttons: the selected one is a primary-teal button, the
+	// rest are clearly muted, so the selection is obvious at a glance.
+	planBtnSel = lipgloss.NewStyle().Foreground(colorText).Background(colorPrimary).Bold(true).Padding(0, 2)
+	planBtn    = lipgloss.NewStyle().Foreground(colorSubtle).Background(colorMutedBg).Padding(0, 2)
 )
 
 func (m monitorModel) View() string {
@@ -631,7 +889,7 @@ func (m monitorModel) View() string {
 	b.WriteString(dimStyle.Render("   "+m.lastRefresh.Format("15:04:05")+"  ·  "+daemon) + "\n")
 
 	if m.err != nil {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  error: "+m.err.Error()) + "\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(colorNeedsYou).Render("  error: "+m.err.Error()) + "\n")
 		return b.String()
 	}
 
@@ -648,6 +906,8 @@ func (m monitorModel) View() string {
 		body = m.renderRunInput(w)
 	case viewOutput:
 		body = m.renderOutput(w)
+	case viewPlan:
+		body = m.renderPlan(w)
 	case viewForm:
 		if m.form != nil {
 			body = m.form.render(w)
@@ -657,9 +917,7 @@ func (m monitorModel) View() string {
 	}
 
 	notice := ""
-	if m.confirming != "" {
-		notice = whyStyle.Render(truncate("  Stop "+m.confirming+"? This kills its process and removes its worktree.", w))
-	} else if m.notice != "" {
+	if m.notice != "" && m.confirming == "" {
 		notice = whyStyle.Render(truncate("  "+m.notice, w))
 	}
 	// Footer hint. Modal views render their own hints in the body.
@@ -669,9 +927,17 @@ func (m monitorModel) View() string {
 	} else if m.view == viewConsent {
 		footer = dimStyle.Render("  y: share · n: skip")
 	} else if m.confirming != "" {
-		footer = dimStyle.Render("  y: yes · n: no")
+		footer = dimStyle.Render("  ↑↓ move · enter select · esc cancel")
+	} else if m.view == viewPlan && m.planFeedback {
+		footer = dimStyle.Render("  type your correction · enter: send · esc: cancel · ↑↓: scroll plan")
+	} else if m.view == viewPlan {
+		footer = dimStyle.Render("  ←→ select · enter: choose · ↑↓/PgUp/PgDn: scroll · esc: back")
 	} else if m.answering {
 		footer = dimStyle.Render("  enter: send & resume · esc: cancel")
+	}
+	// The confirming state replaces the body with a mini palette.
+	if m.confirming != "" {
+		body = m.renderConfirm(w)
 	}
 	return m.frame(b.String(), body, notice, footer, w)
 }
@@ -704,11 +970,7 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		b.WriteString(g.style.Render(fmt.Sprintf("▾ %s (%d)", g.label, len(g.sessions))) + "\n")
 		listLines++
 		for _, s := range g.sessions {
-			row := m.renderRow(s, w)
-			if idx == m.cursor {
-				row = selStyle.Render(row)
-			}
-			b.WriteString(row + "\n")
+			b.WriteString(m.renderRow(s, w, idx == m.cursor) + "\n")
 			idx++
 			listLines++
 		}
@@ -732,20 +994,46 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		if sel.BaseBranch != "" {
 			b.WriteString(dimStyle.Render("  stacked on: "+sel.BaseBranch) + "\n")
 		}
-		for _, ln := range whyLines(*sel) {
-			for _, seg := range wrapLine(ln, w) {
-				b.WriteString(whyStyle.Render(seg) + "\n")
-			}
+		whyRows := whyRowsFor(*sel, w)
+		for _, seg := range whyRows {
+			b.WriteString(whyStyle.Render(seg) + "\n")
 		}
 		if m.answering {
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
-			b.WriteString("  › " + m.input + "▌")
-		} else {
-			whyRowCount := 0
-			for _, ln := range whyLines(*sel) {
-				whyRowCount += len(wrapLine(ln, w))
+			// Walk the atoms into a single display line: typed runes verbatim,
+			// each paste shown inline as "[N lines added]", and "▌" where the
+			// cursor sits. Then word-wrap so long answers stay visible.
+			var line strings.Builder
+			for i, a := range m.answerAtoms {
+				if i == m.answerCursor {
+					line.WriteString("▌")
+				}
+				if a.blob != "" {
+					n := lineCount(a.blob)
+					line.WriteString(fmt.Sprintf("[%d line%s added]", n, plural(n)))
+				} else {
+					line.WriteRune(a.r)
+				}
 			}
-			detailH := m.height - listLines - 10 - whyRowCount
+			if m.answerCursor >= len(m.answerAtoms) {
+				line.WriteString("▌")
+			}
+			const prefix = "  › "
+			const cont = "    "
+			segs := wrapLine(line.String(), w-len([]rune(prefix)))
+			if len(segs) == 0 {
+				b.WriteString(prefix + "\n")
+			} else {
+				for i, seg := range segs {
+					if i == 0 {
+						b.WriteString(prefix + seg + "\n")
+					} else {
+						b.WriteString(cont + seg + "\n")
+					}
+				}
+			}
+		} else {
+			detailH := m.height - listLines - 10 - len(whyRows)
 			if detailH < 3 {
 				detailH = 3
 			}
@@ -801,6 +1089,339 @@ func (m monitorModel) frame(head, body, notice, bar string, w int) string {
 	return b.String()
 }
 
+// planMarkdownDoc builds a markdown document from a session's plan.json for the
+// full-screen viewer, falling back to the durable ~/.magneton/plans/<ticket>.md
+// archive when the worktree is gone. Returns ok=false when there's no plan yet.
+func planMarkdownDoc(s store.Session) (string, bool) {
+	if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
+		title := s.Ticket
+		if s.Summary != "" {
+			title += " · " + s.Summary
+		}
+		return agent.PlanMarkdown(title, plan), true
+	}
+	if data, err := os.ReadFile(paths.PlanMDFor(s.Ticket)); err == nil {
+		return string(data), true
+	}
+	return "", false
+}
+
+// renderMarkdownLines renders markdown to styled terminal rows via glamour,
+// wrapped to width w. A fixed "dark" style avoids glamour querying the terminal
+// for its background (which would clash with bubbletea's raw-mode screen). On any
+// error it falls back to the raw markdown so the viewer is never blank.
+func renderMarkdownLines(md string, w int) []string {
+	if w < 20 {
+		w = 20
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(w),
+	)
+	if err != nil {
+		return strings.Split(md, "\n")
+	}
+	out, err := r.Render(md)
+	if err != nil {
+		return strings.Split(md, "\n")
+	}
+	return strings.Split(strings.TrimRight(out, "\n"), "\n")
+}
+
+// planChrome is the number of non-plan rows the viewer draws around the plan
+// window: app header (1), title (1), menu block (2), and the frame footer (2).
+// When the feedback input is open it adds its block (separator + up to 2 rows).
+func (m monitorModel) planChrome() int {
+	c := 6
+	if m.planFeedback {
+		c += 3
+	}
+	return c
+}
+
+// planViewportHeight is how many rows of the plan are visible.
+func (m monitorModel) planViewportHeight() int {
+	h := m.height - m.planChrome()
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// openPlanView renders the session's plan to markdown and switches to the
+// full-screen viewer. No-op (with a notice) when there's no plan to show.
+func (m monitorModel) openPlanView(s store.Session) (tea.Model, tea.Cmd) {
+	md, ok := planMarkdownDoc(s)
+	if !ok {
+		m.notice = "no plan to show yet for " + s.Ticket
+		return m, nil
+	}
+	m.planTicket = s.Ticket
+	m.planScroll = 0
+	m.planMenu = 0
+	m.planFeedback = false
+	m.planFbAtoms = nil
+	m.planFbCursor = 0
+	m.planLines = renderMarkdownLines(md, m.paneWidth())
+	m.view = viewPlan
+	m.notice = ""
+	return m, nil
+}
+
+// openPlanFeedback opens the viewer straight into the feedback input.
+func (m monitorModel) openPlanFeedback(s store.Session) (tea.Model, tea.Cmd) {
+	mm, cmd := m.openPlanView(s)
+	hub := mm.(monitorModel)
+	if hub.view == viewPlan { // only if a plan was actually found
+		hub.planFeedback = true
+	}
+	return hub, cmd
+}
+
+// paneWidth is the wrap width for the plan viewer (leave a small right margin).
+func (m monitorModel) paneWidth() int {
+	w := m.width
+	if w == 0 {
+		w = 80
+	}
+	return w - 2
+}
+
+// clampPlanScroll keeps the scroll offset within [0, max].
+func (m *monitorModel) clampPlanScroll() {
+	max := len(m.planLines) - m.planViewportHeight()
+	if max < 0 {
+		max = 0
+	}
+	if m.planScroll > max {
+		m.planScroll = max
+	}
+	if m.planScroll < 0 {
+		m.planScroll = 0
+	}
+}
+
+// updatePlan handles keys in the full-screen plan viewer. Two modes: the top
+// menu (←→ select · enter choose) and the inline feedback input (which keeps the
+// plan visible above so the user can scroll it while writing corrections).
+func (m monitorModel) updatePlan(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.planFeedback {
+		return m.updatePlanFeedback(msg)
+	}
+	viewH := m.planViewportHeight()
+	switch msg.String() {
+	case "esc", "q":
+		m.view = viewDashboard
+	case "ctrl+c":
+		return m, tea.Quit
+	case "left", "h", "right", "l", "tab":
+		m.planMenu = 1 - m.planMenu // toggle between the two menu items
+	case "up", "k":
+		m.planScroll--
+		m.clampPlanScroll()
+	case "down", "j":
+		m.planScroll++
+		m.clampPlanScroll()
+	case "pgup", "b":
+		m.planScroll -= viewH
+		m.clampPlanScroll()
+	case "pgdown", " ":
+		m.planScroll += viewH
+		m.clampPlanScroll()
+	case "home", "g":
+		m.planScroll = 0
+	case "end", "G":
+		m.planScroll = len(m.planLines)
+		m.clampPlanScroll()
+	case "enter":
+		if m.planMenu == 1 { // Approve
+			m.syncCursorTo(m.planTicket) // a background reload may have moved the row
+			return m.doAction("approve-plan")
+		}
+		m.planFeedback = true // Give feedback: open the inline input
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+		m.clampPlanScroll()
+	}
+	return m, nil
+}
+
+// updatePlanFeedback edits the inline feedback text. Enter submits (re-plan with
+// the correction), esc cancels back to the menu; up/down/PgUp/PgDn still scroll
+// the plan so it stays reviewable while typing.
+func (m monitorModel) updatePlanFeedback(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Paste {
+		blob := normalizeNewlines(string(msg.Runes))
+		if blob == "" {
+			return m, nil
+		}
+		if oneLine := strings.TrimRight(blob, "\n"); !strings.Contains(oneLine, "\n") && len([]rune(oneLine)) <= pasteInlineMaxRunes {
+			for _, ch := range oneLine {
+				m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ch})
+			}
+		} else {
+			m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{blob: blob})
+		}
+		return m, nil
+	}
+	viewH := m.planViewportHeight()
+	switch msg.Type {
+	case tea.KeyEnter:
+		full := strings.TrimSpace(answerText(m.planFbAtoms))
+		if full == "" { // empty submit cancels back to the menu
+			m.planFeedback = false
+			return m, nil
+		}
+		key := m.planTicket
+		m.planFeedback = false
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+		m.view = viewDashboard
+		m.notice = "sending plan feedback to " + key + "…"
+		m.syncCursorTo(key)
+		return m, m.submitPlanFeedback(key, full)
+	case tea.KeyEsc:
+		m.planFeedback = false // back to the menu, plan stays open
+		m.planFbAtoms = nil
+		m.planFbCursor = 0
+	case tea.KeyUp:
+		m.planScroll--
+		m.clampPlanScroll()
+	case tea.KeyDown:
+		m.planScroll++
+		m.clampPlanScroll()
+	case tea.KeyPgUp:
+		m.planScroll -= viewH
+		m.clampPlanScroll()
+	case tea.KeyPgDown:
+		m.planScroll += viewH
+		m.clampPlanScroll()
+	case tea.KeyLeft:
+		if m.planFbCursor > 0 {
+			m.planFbCursor--
+		}
+	case tea.KeyRight:
+		if m.planFbCursor < len(m.planFbAtoms) {
+			m.planFbCursor++
+		}
+	case tea.KeyBackspace:
+		if m.planFbCursor > 0 {
+			m.planFbAtoms = append(m.planFbAtoms[:m.planFbCursor-1], m.planFbAtoms[m.planFbCursor:]...)
+			m.planFbCursor--
+		}
+	case tea.KeySpace:
+		m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ' '})
+	case tea.KeyRunes:
+		for _, ch := range msg.Runes {
+			m.planFbAtoms, m.planFbCursor = insertAtom(m.planFbAtoms, m.planFbCursor, inputAtom{r: ch})
+		}
+	default:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+// syncCursorTo points the selection at a ticket by id, so cursor-based actions
+// act on it even if a background reload reordered the list.
+func (m *monitorModel) syncCursorTo(ticket string) {
+	for i := range m.flat {
+		if m.flat[i].Ticket == ticket {
+			m.cursor = i + 2 // 0=Start-new 1=Edit-config agents=2..
+			return
+		}
+	}
+}
+
+// renderPlan is the full-screen plan viewer: a top action menu, a scrollable
+// window over the glamour-rendered plan, and (when active) an inline feedback
+// input below the plan.
+func (m monitorModel) renderPlan(w int) string {
+	var b strings.Builder
+
+	// Title + scroll position.
+	viewH := m.planViewportHeight()
+	pct := ""
+	if len(m.planLines) > viewH {
+		bottom := m.planScroll + viewH
+		if bottom > len(m.planLines) {
+			bottom = len(m.planLines)
+		}
+		pct = fmt.Sprintf("  %d–%d of %d", m.planScroll+1, bottom, len(m.planLines))
+	}
+	b.WriteString(headerStyle.Render(truncate("  Plan · "+m.planTicket, w)) + dimStyle.Render(pct) + "\n")
+
+	// Action menu: two buttons. The selected one is a bright teal button; the
+	// other is muted. While typing feedback the input has focus, so highlight the
+	// "Give feedback" button as active.
+	items := []string{"Give feedback", "Approve"}
+	active := m.planMenu
+	if m.planFeedback {
+		active = 0
+	}
+	var menu strings.Builder
+	menu.WriteString("  ")
+	for i, it := range items {
+		if i == active {
+			menu.WriteString(planBtnSel.Render("▸ "+it) + "  ")
+		} else {
+			menu.WriteString(planBtn.Render(it) + "  ")
+		}
+	}
+	b.WriteString(menu.String() + "\n\n")
+
+	// Plan window.
+	start := m.planScroll
+	if start > len(m.planLines)-viewH {
+		start = len(m.planLines) - viewH
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + viewH
+	if end > len(m.planLines) {
+		end = len(m.planLines)
+	}
+	for _, ln := range m.planLines[start:end] {
+		b.WriteString(ln + "\n")
+	}
+
+	// Inline feedback input, below the plan.
+	if m.planFeedback {
+		b.WriteString(sepStyle.Render(strings.Repeat("─", w)) + "\n")
+		var line strings.Builder
+		for i, a := range m.planFbAtoms {
+			if i == m.planFbCursor {
+				line.WriteString("▌")
+			}
+			if a.blob != "" {
+				n := lineCount(a.blob)
+				line.WriteString(fmt.Sprintf("[%d line%s added]", n, plural(n)))
+			} else {
+				line.WriteRune(a.r)
+			}
+		}
+		if m.planFbCursor >= len(m.planFbAtoms) {
+			line.WriteString("▌")
+		}
+		const prefix = "  feedback › "
+		segs := wrapLine(line.String(), w-len([]rune(prefix)))
+		if len(segs) == 0 {
+			b.WriteString(prefix + "\n")
+		} else {
+			for i, seg := range segs {
+				if i == 0 {
+					b.WriteString(prefix + seg + "\n")
+				} else {
+					b.WriteString("    " + seg + "\n")
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
 // whyLines explains, for a needs-you/stopped/failed agent, what it's blocked on.
 func whyLines(s store.Session) []string {
 	if isStopped(s) {
@@ -817,12 +1438,33 @@ func whyLines(s store.Session) []string {
 	case "awaiting-answer":
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && len(plan.Questions) > 0 {
 			out := []string{fmt.Sprintf("▮ Needs you - press ↵ enter to answer %d question(s):", len(plan.Questions))}
+			// Cap count and length so many/verbose questions can't flood the pane.
+			const maxQuestions = 4
 			for i, q := range plan.Questions {
-				out = append(out, fmt.Sprintf("  Q%d %s", i+1, q))
+				if i == maxQuestions {
+					out = append(out, fmt.Sprintf("  … +%d more - press enter to see them all", len(plan.Questions)-maxQuestions))
+					break
+				}
+				out = append(out, fmt.Sprintf("  Q%d %s", i+1, truncateWords(q, 24)))
 			}
 			return out
 		}
 		return []string{"▮ Needs you - press ↵ enter to respond (see log below)."}
+	case store.StatePlanReview:
+		// The full plan (free-form markdown, possibly long) lives in the dedicated
+		// full-screen viewer (press enter); the detail pane shows a one-line teaser.
+		out := []string{"▮ Plan ready - press ↵ enter to read the full plan, then approve or give feedback"}
+		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
+			if teaser := planTeaser(plan.Plan); teaser != "" {
+				out = append(out, "  "+teaser)
+			}
+			meta := fmt.Sprintf("  Confidence: %s · Type: %s", plan.Confidence, plan.Type)
+			if n := len(plan.Steps); n > 0 { // legacy plans still carry a steps list
+				meta = fmt.Sprintf("  %d step(s) ·", n) + strings.TrimPrefix(meta, " ")
+			}
+			out = append(out, meta)
+		}
+		return out
 	case "failed":
 		return []string{
 			"✗ Failed - " + failReason(s.Ticket),
@@ -847,6 +1489,37 @@ func whyLines(s store.Session) []string {
 	return nil
 }
 
+// whyRowsFor wraps a session's whyLines to the width and caps the total rows,
+// so a verbose state note can never flood the detail pane and push the ticket
+// list or log off screen - the full content lives in the dedicated viewers.
+func whyRowsFor(s store.Session, w int) []string {
+	const maxWhyRows = 8
+	var rows []string
+	for _, ln := range whyLines(s) {
+		rows = append(rows, wrapLine(ln, w)...)
+	}
+	if len(rows) > maxWhyRows {
+		rows = append(rows[:maxWhyRows], "  …")
+	}
+	return rows
+}
+
+// planTeaser reduces a free-form markdown plan to a single display line for
+// the dashboard detail pane: the first non-empty line, stripped of markdown
+// decoration and capped in length.
+func planTeaser(plan string) string {
+	for _, ln := range strings.Split(plan, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") || strings.HasPrefix(ln, "```") {
+			continue // headings and fences make useless teasers - find real prose
+		}
+		if ln = strings.TrimSpace(strings.TrimLeft(ln, "*-> ")); ln != "" {
+			return truncateWords(ln, 24)
+		}
+	}
+	return ""
+}
+
 // failReason scrapes the most recent failure line from the log tail.
 func failReason(ticket string) string {
 	lines := tailLines(paths.LogFor(ticket), 50)
@@ -859,10 +1532,12 @@ func failReason(ticket string) string {
 	return "see log below"
 }
 
-func (m monitorModel) renderRow(s store.Session, w int) string {
-	// Show the ticket title so each row says what work it is, at a glance.
-	// Fall back to the latest log line only if there's no title.
-	desc := s.Summary
+func (m monitorModel) renderRow(s store.Session, w int, selected bool) string {
+	// ShortDesc (LLM-generated <10-word gist) → Summary → latest log line.
+	desc := s.ShortDesc
+	if desc == "" {
+		desc = s.Summary
+	}
 	if desc == "" {
 		desc = cleanActivity(tailLines(paths.LogFor(s.Ticket), 1), s.Ticket)
 	}
@@ -872,11 +1547,24 @@ func (m monitorModel) renderRow(s store.Session, w int) string {
 	}
 	left := fmt.Sprintf("  %s %-9s %-11s", glyphFor(s), s.Ticket, stateLabel(s)+retries)
 	right := fmt.Sprintf(" %4s", age(s.UpdatedAt))
-	flex := w - lipgloss.Width(left) - lipgloss.Width(right) - 1
+
+	// The selected row carries an inline "↵ actions" affordance so it's obvious
+	// pressing enter opens the actions menu.
+	hint := ""
+	if selected {
+		hint = "  ↵ actions "
+	}
+	flex := w - lipgloss.Width(left) - lipgloss.Width(right) - lipgloss.Width(hint) - 1
 	if flex < 6 {
 		flex = 6
 	}
-	return left + fmt.Sprintf(" %-*s", flex, truncate(desc, flex)) + right
+	mid := fmt.Sprintf(" %-*s", flex, truncate(desc, flex))
+	if !selected {
+		return left + mid + right
+	}
+	// Compose the highlight across the whole line, accenting only the hint. All
+	// three segments share selStyle's background so the highlight stays solid.
+	return selStyle.Render(left+mid) + hintStyle.Render(hint) + selStyle.Render(right)
 }
 
 // ---- helpers ---------------------------------------------------------------

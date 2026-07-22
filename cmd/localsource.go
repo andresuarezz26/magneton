@@ -21,6 +21,7 @@ type ticketSpec struct {
 	sourcePath string   // absolute path to the .md file; empty for Jira tickets
 	images     []string // image files attached to the ticket (pasted-content flow)
 	stackBase  string   // bare base branch name for stacked diffs; "" = default
+	branch     string   // exact branch name (--branch); "" = derive from the repo pattern
 }
 
 var (
@@ -96,7 +97,7 @@ func loadLocalTicket(path string) (ticketSpec, error) {
 }
 
 // discoverPastedImages returns sibling image files when the ticket .md lives in a
-// magneton-controlled pasted dir (~/.agent/pasted/<id>/). Returns nil for a user's
+// magneton-controlled pasted dir (~/.magneton/pasted/<id>/). Returns nil for a user's
 // own .md file, so we never sweep in unrelated images from their repo.
 func discoverPastedImages(mdPath string) []string {
 	dir := filepath.Dir(mdPath)
@@ -224,6 +225,36 @@ func truncateTitle(s string) string {
 		cut = cut[:i]
 	}
 	return strings.TrimSpace(cut) + "…"
+}
+
+// truncateWords returns s truncated to at most n words (space-joined).
+// Unicode-safe; each whitespace run counts as a word boundary.
+func truncateWords(s string, n int) string {
+	words := strings.Fields(s)
+	if len(words) <= n {
+		return s
+	}
+	return strings.Join(words[:n], " ")
+}
+
+// firstSentence returns the text up to (but not including) the first period or
+// newline, trimmed. Returns the whole string when neither is found.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, ".\n"); i > 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// firstNonEmpty returns the first argument whose trimmed value is non-empty.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // ticketIDFromPath turns a/b/ticket_1.md into "TICKET-1": strip dir + extension,

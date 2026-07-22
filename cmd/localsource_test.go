@@ -227,6 +227,48 @@ func TestNormalizeNewlines(t *testing.T) {
 	}
 }
 
+func TestTruncateWords(t *testing.T) {
+	cases := []struct{ in string; n int; want string }{
+		{"one two three", 5, "one two three"},  // under limit → unchanged
+		{"one two three four five six", 3, "one two three"},
+		{"hello world", 1, "hello"},
+		{"", 5, ""},
+		{"café résumé", 1, "café"},             // unicode
+	}
+	for _, c := range cases {
+		if got := truncateWords(c.in, c.n); got != c.want {
+			t.Errorf("truncateWords(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
+func TestFirstSentence(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Fix the login bug. More detail.", "Fix the login bug"},
+		{"Add upload flow\nMore info here", "Add upload flow"},
+		{"No terminator here", "No terminator here"},
+		{"  spaces  ", "spaces"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := firstSentence(c.in); got != c.want {
+			t.Errorf("firstSentence(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "  ", "hello", "world"); got != "hello" {
+		t.Errorf("firstNonEmpty = %q, want hello", got)
+	}
+	if got := firstNonEmpty("", ""); got != "" {
+		t.Errorf("all empty: got %q", got)
+	}
+	if got := firstNonEmpty("first"); got != "first" {
+		t.Errorf("single: got %q", got)
+	}
+}
+
 // TestPastedContentCRLF reproduces the real bug: a terminal paste delivers
 // newlines as carriage returns, so without normalization the whole ticket looks
 // like one line and the title/render get corrupted.

@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
 
@@ -109,6 +113,249 @@ func TestIsStopped(t *testing.T) {
 	}
 	if isStopped(store.Session{State: "review", UpdatedAt: old}) {
 		t.Error("review is terminal; never stopped")
+	}
+}
+
+// whyLines for a plan-review session renders the approach and steps read from
+// the worktree's .agent/plan.json.
+func TestWhyLinesPlanReview(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-42", State: store.StatePlanReview}
+
+	// Stub a plan.json under the ticket's worktree path.
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	agentDir := filepath.Join(wt, ".agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"Add pull to refresh on the feed","steps":["Wrap the list in SwipeRefresh","Wire the refresh callback"],"confidence":"high","type":"feature"}`
+	if err := os.WriteFile(filepath.Join(agentDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The detail pane is now a short teaser (approach + counts); the full plan,
+	// including the numbered steps, lives in the dedicated full-screen viewer.
+	lines := whyLines(s)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"Plan ready", "read the full plan",
+		"Add pull to refresh on the feed",
+		"2 step(s)", "Confidence: high", "Type: feature",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("whyLines(plan-review) missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+// A long free-form markdown plan must NOT flood the detail pane: whyLines shows
+// a one-line teaser and whyRowsFor caps the total rows regardless of content.
+func TestWhyLinesPlanReviewLongPlanIsCapped(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-43", State: store.StatePlanReview}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A 60-line markdown plan (the new free-form format).
+	longPlan := "## Approach\\nFirst line of the actual plan."
+	for i := 0; i < 60; i++ {
+		longPlan += fmt.Sprintf("\\n- detail line %d", i)
+	}
+	planJSON := `{"plan":"` + longPlan + `","confidence":"high","type":"feature"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := whyLines(s)
+	if len(lines) > 4 {
+		t.Errorf("plan-review whyLines should be a short teaser, got %d lines:\n%s",
+			len(lines), strings.Join(lines, "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "First line of the actual plan") {
+		t.Errorf("teaser should show the plan's first real line:\n%s", joined)
+	}
+	if strings.Contains(joined, "detail line 5") {
+		t.Errorf("teaser must not include the plan body:\n%s", joined)
+	}
+
+	// The render-level cap holds even for pathological content.
+	if rows := whyRowsFor(s, 80); len(rows) > 9 {
+		t.Errorf("whyRowsFor must cap rows, got %d", len(rows))
+	}
+}
+
+// Many questions collapse to a capped list with a "+N more" line.
+func TestWhyLinesQuestionsCapped(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-44", State: "awaiting-answer"}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"p","questions":["q1?","q2?","q3?","q4?","q5?","q6?"],"confidence":"high","type":"bug"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(whyLines(s), "\n")
+	if !strings.Contains(joined, "Q4") || strings.Contains(joined, "q5?") {
+		t.Errorf("questions should cap at 4:\n%s", joined)
+	}
+	if !strings.Contains(joined, "+2 more") {
+		t.Errorf("capped questions should say how many more:\n%s", joined)
+	}
+}
+
+// planMarkdownDoc builds a markdown doc from the worktree's plan.json.
+func TestPlanMarkdownDoc(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-50", Summary: "Add topics", State: store.StatePlanReview}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"Add topic discovery","steps":["Add topic field","Run tests"],"questions":["Which screen?"],"confidence":"high","type":"feature","diagram":"` + "```" + `\nHome --> Discover\n` + "```" + `"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	md, ok := planMarkdownDoc(s)
+	if !ok {
+		t.Fatal("expected a plan doc")
+	}
+	for _, want := range []string{
+		"# K-50 · Add topics",
+		"**Confidence:** high",
+		"Add topic discovery", // plan body is free-form markdown, included verbatim
+		"## Diagram", "Home --> Discover",
+		"## Steps", "1. Add topic field", "2. Run tests",
+		"## Open questions", "- Which screen?",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("planMarkdownDoc missing %q in:\n%s", want, md)
+		}
+	}
+
+	// No plan on disk → ok=false.
+	if _, ok := planMarkdownDoc(store.Session{Ticket: "NOPE", State: store.StatePlanReview}); ok {
+		t.Error("expected ok=false when no plan.json exists")
+	}
+}
+
+// ansiRe strips terminal color codes so tests can match glamour's plain text.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// renderMarkdownLines produces styled, non-empty rows and never returns nil for
+// real content (falls back to raw markdown on any renderer error).
+func TestRenderMarkdownLines(t *testing.T) {
+	lines := renderMarkdownLines("# Title\n\n- alpha item\n- bravo item\n", 60)
+	if len(lines) == 0 {
+		t.Fatal("expected rendered rows")
+	}
+	plain := ansiRe.ReplaceAllString(strings.Join(lines, "\n"), "")
+	for _, want := range []string{"Title", "alpha item", "bravo item"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("rendered output missing %q in:\n%s", want, plain)
+		}
+	}
+}
+
+// updatePlan scrolls within bounds and leaves on esc.
+func TestUpdatePlanScrollAndExit(t *testing.T) {
+	m := monitorModel{view: viewPlan, height: 20, planTicket: "K-1"}
+	m.planLines = make([]string, 50)
+	maxScroll := len(m.planLines) - m.planViewportHeight()
+
+	// Down clamps up from 0.
+	nm, _ := m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
+	if got := nm.(monitorModel).planScroll; got != 1 {
+		t.Errorf("down: scroll = %d, want 1", got)
+	}
+	// Up never goes below 0.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyUp})
+	if got := nm.(monitorModel).planScroll; got != 0 {
+		t.Errorf("up at top: scroll = %d, want 0", got)
+	}
+	// End jumps to the max, and further down won't exceed it.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyEnd})
+	if got := nm.(monitorModel).planScroll; got != maxScroll {
+		t.Errorf("end: scroll = %d, want %d", got, maxScroll)
+	}
+	m.planScroll = maxScroll
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyDown})
+	if got := nm.(monitorModel).planScroll; got != maxScroll {
+		t.Errorf("down at bottom: scroll = %d, want %d (clamped)", got, maxScroll)
+	}
+	// Esc returns to the dashboard.
+	nm, _ = m.updatePlan(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := nm.(monitorModel).view; got != viewDashboard {
+		t.Errorf("esc: view = %d, want dashboard", got)
+	}
+}
+
+// The plan viewer's top menu: ←→ toggles between "Give feedback" (0) and
+// "Approve" (1); enter on "Give feedback" opens the inline input, and esc in the
+// input returns to the menu with the plan still open.
+func TestPlanMenuAndFeedbackToggle(t *testing.T) {
+	m := monitorModel{view: viewPlan, height: 20, planTicket: "K-1"}
+	m.planLines = make([]string, 12)
+
+	// Default selection is "Give feedback" (0); right toggles to "Approve" (1).
+	nm, _ := m.updatePlan(tea.KeyMsg{Type: tea.KeyRight})
+	if got := nm.(monitorModel).planMenu; got != 1 {
+		t.Errorf("right: planMenu = %d, want 1", got)
+	}
+	// Left toggles back to "Give feedback" (0).
+	nm, _ = nm.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyLeft})
+	if got := nm.(monitorModel).planMenu; got != 0 {
+		t.Errorf("left: planMenu = %d, want 0", got)
+	}
+	// Enter on "Give feedback" opens the inline input (stays in the plan view).
+	nm, _ = nm.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if !hub.planFeedback || hub.view != viewPlan {
+		t.Errorf("enter feedback: planFeedback=%v view=%d, want true/viewPlan", hub.planFeedback, hub.view)
+	}
+	// Typing appends to the feedback buffer.
+	hub2, _ := hub.updatePlan(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	if got := answerText(hub2.(monitorModel).planFbAtoms); got != "hi" {
+		t.Errorf("typed feedback = %q, want %q", got, "hi")
+	}
+	// Esc cancels the input but keeps the plan open (back to the menu).
+	hub3, _ := hub2.(monitorModel).updatePlan(tea.KeyMsg{Type: tea.KeyEsc})
+	h3 := hub3.(monitorModel)
+	if h3.planFeedback || h3.view != viewPlan {
+		t.Errorf("esc feedback: planFeedback=%v view=%d, want false/viewPlan", h3.planFeedback, h3.view)
+	}
+}
+
+// agentActions for a plan-review session offers approve-plan and plan-feedback,
+// and does NOT offer resume/ship (plan-review is neither active nor stuck).
+func TestAgentActionsPlanReview(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	// Build a worktree so studio/claude also show, matching a real plan-review row.
+	wt := paths.WorktreeFor("", "K-43")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := map[string]bool{}
+	for _, it := range agentActions(store.Session{Ticket: "K-43", State: store.StatePlanReview}) {
+		ids[it.key] = true
+	}
+	for _, want := range []string{"approve-plan", "plan-feedback"} {
+		if !ids[want] {
+			t.Errorf("plan-review menu missing %q", want)
+		}
+	}
+	for _, no := range []string{"resume", "ship"} {
+		if ids[no] {
+			t.Errorf("plan-review should NOT offer %q", no)
+		}
 	}
 }
 
@@ -217,6 +464,236 @@ func TestCancelAgentMarksStopped(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// typeAnswer feeds a string into the answer input one rune at a time, as if
+// typed, and returns the resulting model.
+func typeAnswer(m monitorModel, s string) monitorModel {
+	for _, ch := range s {
+		got, _ := m.updateAnswering(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		m = got.(monitorModel)
+	}
+	return m
+}
+
+func TestUpdateAnsweringPasteInline(t *testing.T) {
+	m := monitorModel{answering: true, answerKey: "K1"}
+
+	// Type a lead-in, then paste a 3-line blob.
+	m = typeAnswer(m, "I want this class:")
+	got, _ := m.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune("a\nb\nc")})
+	m = got.(monitorModel)
+
+	// The paste is one atom placed after the typed text; cursor sits past it.
+	if m.answerCursor != len(m.answerAtoms) {
+		t.Errorf("cursor should be at end: cursor=%d len=%d", m.answerCursor, len(m.answerAtoms))
+	}
+	// A second, independent 2-line paste must count as 2 - not merge with the
+	// first paste's last line (the old accumulation bug reported "+1").
+	got, _ = m.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune("d\ne")})
+	m = got.(monitorModel)
+
+	var blobs []string
+	for _, a := range m.answerAtoms {
+		if a.blob != "" {
+			blobs = append(blobs, a.blob)
+		}
+	}
+	if len(blobs) != 2 {
+		t.Fatalf("want 2 distinct paste atoms, got %d", len(blobs))
+	}
+	if lineCount(blobs[0]) != 3 || lineCount(blobs[1]) != 2 {
+		t.Errorf("paste line counts: got %d and %d, want 3 and 2", lineCount(blobs[0]), lineCount(blobs[1]))
+	}
+
+	// Submitting expands pastes to their full bodies interleaved with the text.
+	full := answerText(m.answerAtoms)
+	if !strings.Contains(full, "I want this class:") || !strings.Contains(full, "a\nb\nc") || !strings.Contains(full, "d\ne") {
+		t.Errorf("assembled answer missing parts: %q", full)
+	}
+}
+
+func TestUpdateAnsweringManyPastes(t *testing.T) {
+	m := monitorModel{answering: true, answerKey: "K1"}
+
+	// Interleave a typed word and a paste, five times over. Nothing caps the
+	// number of pastes - each is its own atom.
+	// All multi-line so each stays a collapsed chip (short single-line pastes
+	// inline as text - covered separately).
+	pastes := []string{"a\nb", "c\nd\ne", "f\ng", "g\nh\ni\nj", "k\nl"}
+	wantLines := []int{2, 3, 2, 4, 2}
+	for _, p := range pastes {
+		m = typeAnswer(m, "word ")
+		got, _ := m.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune(p)})
+		m = got.(monitorModel)
+	}
+
+	var got []int
+	for _, a := range m.answerAtoms {
+		if a.blob != "" {
+			got = append(got, lineCount(a.blob))
+		}
+	}
+	if len(got) != len(pastes) {
+		t.Fatalf("want %d distinct pastes, got %d", len(pastes), len(got))
+	}
+	for i := range wantLines {
+		if got[i] != wantLines[i] {
+			t.Errorf("paste %d line count: got %d, want %d", i, got[i], wantLines[i])
+		}
+	}
+}
+
+func TestUpdateAnsweringShortPasteInlinesAsText(t *testing.T) {
+	// A short single-line paste becomes literal typed text - no paste atom, no
+	// "[1 line added]" chip.
+	m := monitorModel{answering: true, answerKey: "K1"}
+	got, _ := m.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune("https://example.com/x")})
+	m = got.(monitorModel)
+	for _, a := range m.answerAtoms {
+		if a.blob != "" {
+			t.Fatalf("short single-line paste should not create a paste atom")
+		}
+	}
+	if answerText(m.answerAtoms) != "https://example.com/x" {
+		t.Errorf("short paste text: got %q", answerText(m.answerAtoms))
+	}
+	if m.answerCursor != len([]rune("https://example.com/x")) {
+		t.Errorf("cursor should be past the inlined text: got %d", m.answerCursor)
+	}
+
+	// A single line at/over the cutoff stays a collapsed paste atom.
+	long := strings.Repeat("z", pasteInlineMaxRunes+1)
+	m2 := monitorModel{answering: true, answerKey: "K1"}
+	got2, _ := m2.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune(long)})
+	m2 = got2.(monitorModel)
+	blobs := 0
+	for _, a := range m2.answerAtoms {
+		if a.blob != "" {
+			blobs++
+		}
+	}
+	if blobs != 1 {
+		t.Errorf("long single-line paste should stay one paste atom, got %d", blobs)
+	}
+
+	// A multi-line paste, even a short one, stays a paste atom.
+	m3 := monitorModel{answering: true, answerKey: "K1"}
+	got3, _ := m3.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune("a\nb")})
+	m3 = got3.(monitorModel)
+	if len(m3.answerAtoms) != 1 || m3.answerAtoms[0].blob == "" {
+		t.Errorf("multi-line paste should stay one paste atom: %+v", m3.answerAtoms)
+	}
+}
+
+func TestUpdateAnsweringEscClears(t *testing.T) {
+	m := monitorModel{answering: true, answerKey: "K1"}
+	m = typeAnswer(m, "hello")
+	got, _ := m.updateAnswering(tea.KeyMsg{Type: tea.KeyEsc})
+	mm := got.(monitorModel)
+	if mm.answering || mm.answerAtoms != nil || mm.answerCursor != 0 {
+		t.Error("Esc should clear answering, answerAtoms, and answerCursor")
+	}
+}
+
+func TestUpdateAnsweringCursor(t *testing.T) {
+	m := monitorModel{answering: true, answerKey: "K1"}
+	m = typeAnswer(m, "abc")
+	if answerText(m.answerAtoms) != "abc" || m.answerCursor != 3 {
+		t.Errorf("after typing abc: text=%q cursor=%d", answerText(m.answerAtoms), m.answerCursor)
+	}
+
+	// Left, then insert "X" mid-string → "abXc".
+	got, _ := m.updateAnswering(tea.KeyMsg{Type: tea.KeyLeft})
+	m = got.(monitorModel)
+	if m.answerCursor != 2 {
+		t.Errorf("after Left: cursor=%d, want 2", m.answerCursor)
+	}
+	m = typeAnswer(m, "X")
+	if answerText(m.answerAtoms) != "abXc" || m.answerCursor != 3 {
+		t.Errorf("insert mid: text=%q cursor=%d", answerText(m.answerAtoms), m.answerCursor)
+	}
+
+	// Backspace deletes "X" → "abc", cursor=2.
+	got, _ = m.updateAnswering(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = got.(monitorModel)
+	if answerText(m.answerAtoms) != "abc" || m.answerCursor != 2 {
+		t.Errorf("backspace: text=%q cursor=%d", answerText(m.answerAtoms), m.answerCursor)
+	}
+
+	// Left clamps at 0.
+	for i := 0; i < 10; i++ {
+		got, _ = m.updateAnswering(tea.KeyMsg{Type: tea.KeyLeft})
+		m = got.(monitorModel)
+	}
+	if m.answerCursor != 0 {
+		t.Errorf("cursor clamped at 0: got %d", m.answerCursor)
+	}
+}
+
+func TestUpdateAnsweringBackspaceDeletesWholePaste(t *testing.T) {
+	m := monitorModel{answering: true, answerKey: "K1"}
+	m = typeAnswer(m, "hi")
+	got, _ := m.updateAnswering(tea.KeyMsg{Paste: true, Runes: []rune("x\ny\nz")})
+	m = got.(monitorModel)
+
+	// One backspace removes the entire paste chunk, not one character of it.
+	got, _ = m.updateAnswering(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = got.(monitorModel)
+	if answerText(m.answerAtoms) != "hi" {
+		t.Errorf("backspace over paste should remove it whole: got %q", answerText(m.answerAtoms))
+	}
+}
+
+// TestRenderRowDescPreference verifies the priority order for the third column:
+// ShortDesc → Summary → log fallback.
+func TestRenderRowDescPreference(t *testing.T) {
+	m := monitorModel{}
+	w := 80
+
+	// ShortDesc wins over Summary.
+	s1 := store.Session{
+		Ticket:    "K-1",
+		State:     "working",
+		Summary:   "Long verbose Jira summary that should not appear",
+		ShortDesc: "upload paper to storage",
+		UpdatedAt: time.Now(),
+	}
+	row1 := m.renderRow(s1, w, false)
+	if !strings.Contains(row1, "upload paper to storage") {
+		t.Errorf("ShortDesc should appear in row: %q", row1)
+	}
+	if strings.Contains(row1, "Long verbose") {
+		t.Errorf("Summary should be hidden when ShortDesc is set: %q", row1)
+	}
+
+	// Summary shows when ShortDesc is empty.
+	s2 := store.Session{
+		Ticket:    "K-2",
+		State:     "working",
+		Summary:   "Fix login crash",
+		ShortDesc: "",
+		UpdatedAt: time.Now(),
+	}
+	row2 := m.renderRow(s2, w, false)
+	if !strings.Contains(row2, "Fix login crash") {
+		t.Errorf("Summary should appear when ShortDesc is empty: %q", row2)
+	}
+}
+
+// The selected row shows an inline "↵ actions" affordance; unselected rows don't.
+func TestRenderRowSelectedHint(t *testing.T) {
+	m := monitorModel{}
+	s := store.Session{Ticket: "K-1", State: "working", ShortDesc: "do a thing", UpdatedAt: time.Now()}
+
+	sel := m.renderRow(s, 80, true)
+	if !strings.Contains(sel, "↵ actions") {
+		t.Errorf("selected row should show the ↵ actions hint: %q", sel)
+	}
+	unsel := m.renderRow(s, 80, false)
+	if strings.Contains(unsel, "↵ actions") {
+		t.Errorf("unselected row must not show the hint: %q", unsel)
 	}
 }
 

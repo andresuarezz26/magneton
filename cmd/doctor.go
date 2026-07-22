@@ -11,9 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/andresuarezz26/magneton/internal/config"
-	"github.com/andresuarezz26/magneton/internal/jira"
 	"github.com/andresuarezz26/magneton/internal/paths"
-	"github.com/andresuarezz26/magneton/internal/secrets"
 )
 
 // resolveSDKBinary finds a binary by name, first in PATH, then under the SDK
@@ -81,17 +79,15 @@ func init() {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("config: %s\n\n", paths.Config())
-			fmt.Println("connectivity check")
-			jc := jira.New(cfg.JiraBaseURL, cfg.JiraEmail, secrets.Get(secrets.Jira))
-			report("Jira", jc.Verify())
+			fmt.Printf("Checking your magneton setup…\nconfig: %s\n\n", paths.Config())
+			fmt.Println("Required")
 			for _, r := range cfg.Repos {
 				report("git remote (origin) - "+r.Path, checkGitRemote(config.Expand(r.Path)))
 			}
 			report("claude CLI", exec.Command("claude", "--version").Run())
 			report("gh CLI", checkGH())
 
-			fmt.Println("\nemulator (optional - used automatically for UI/instrumentation tasks)")
+			fmt.Println("\nOptional (used automatically for UI/instrumentation tasks)")
 			report("adb", checkSDKBinary("adb", cfg.AndroidSDKPath, "install Android SDK platform-tools"))
 			report("emulator", checkSDKBinary("emulator", cfg.AndroidSDKPath, "install Android SDK emulator package"))
 			if cfg.AVDName != "" {

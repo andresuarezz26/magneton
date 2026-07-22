@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/config"
 	"github.com/andresuarezz26/magneton/internal/jira"
 	"github.com/andresuarezz26/magneton/internal/paths"
@@ -19,14 +20,17 @@ import (
 )
 
 var (
-	runRepo   string
-	runDryRun bool
-	runLocal  bool
-	runTitle  string
-	runDesc   string
-	runResume bool
-	runShip   bool
-	runBase   string
+	runRepo       string
+	runDryRun     bool
+	runLocal      bool
+	runTitle      string
+	runDesc       string
+	runResume     bool
+	runShip       bool
+	runBase       string
+	runBranch     string
+	runReviewPlan bool
+	runFromPlan   bool
 )
 
 func init() {
@@ -44,6 +48,9 @@ func init() {
 	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
 	c.Flags().BoolVar(&runShip, "ship", false, "ship without verifying: trust your manual fix, commit + push + PR directly (use when verification itself is unreliable in the worktree)")
 	c.Flags().StringVar(&runBase, "base", "", "base branch (or ticket id) to stack on; overrides config default")
+	c.Flags().StringVar(&runBranch, "branch", "", "exact branch name for the PR; overrides the config branch pattern")
+	c.Flags().BoolVar(&runReviewPlan, "review-plan", false, "pause after planning so you can review the plan before implementation")
+	c.Flags().BoolVar(&runFromPlan, "from-plan", false, "skip planning: implement from the existing plan.json in the worktree")
 	rootCmd.AddCommand(c)
 }
 
@@ -114,6 +121,9 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 	if multi && (runTitle != "" || runDesc != "") {
 		return nil, fmt.Errorf("--title/--desc cannot be combined with multiple tickets; put the text in the .md files")
 	}
+	if multi && runBranch != "" {
+		return nil, fmt.Errorf("--branch cannot be combined with multiple tickets; the branch name is per-ticket")
+	}
 
 	specs := make([]ticketSpec, 0, len(args))
 	for _, arg := range args {
@@ -124,6 +134,7 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 			}
 			specs = append(specs, ticketSpec{
 				ticket: normalizeTicket(arg), summary: runTitle, desc: runDesc, local: true,
+				branch: runBranch,
 			})
 			continue
 		}
@@ -134,11 +145,12 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 				return nil, err
 			}
 			sp.stackBase = runBase
+			sp.branch = runBranch
 			specs = append(specs, sp)
 			continue
 		}
 		// (3) Jira ticket key.
-		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg), stackBase: runBase})
+		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg), stackBase: runBase, branch: runBranch})
 	}
 
 	return dedupeSpecs(specs), nil
@@ -212,9 +224,14 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 
 	logf("[%s] %s", sp.ticket, summary)
 
+	// Effective plan-review: the per-run flag wins, else fall back to the config
+	// default. Persisted so TUI re-spawns (answer/feedback) keep the gate on.
+	reviewPlan := runReviewPlan || cfg.ReviewPlans
+
 	// State store so `magneton status` reflects manual runs too.
 	_, _ = st.Claim(sp.ticket, repo.Path, summary)
 	_ = st.SetPID(sp.ticket, os.Getpid()) // for monitor liveness (kill -0)
+	_ = st.SetReviewPlan(sp.ticket, reviewPlan)
 	if sp.sourcePath != "" {
 		_ = st.SetSourcePath(sp.ticket, sp.sourcePath)
 	}
@@ -222,6 +239,28 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	// (failed/needs-you/stopped/review) right away instead of lingering there
 	// until the pipeline reaches planning (after the slow worktree setup).
 	_ = st.SetState(sp.ticket, store.StateQueued, 0)
+
+	// Short description for the dashboard third column — set immediately with a
+	// programmatic fallback so the column is never empty, then upgraded async by an
+	// LLM call so noisy or verbose summaries get normalised to <10 words.
+	progDesc := truncateWords(firstNonEmpty(summary, firstSentence(desc), sp.ticket), 10)
+	_ = st.SetShortDesc(sp.ticket, progDesc)
+	go func() {
+		apiKey := secrets.Get(secrets.Anthropic)
+		descSnip := desc
+		if len(descSnip) > 1000 {
+			descSnip = descSnip[:1000]
+		}
+		prompt := fmt.Sprintf(
+			"In at most 9 words, plain text, no quotes or period, describe what this ticket asks for. Title: %s. Description: %s",
+			summary, descSnip)
+		if out := agent.Oneshot(prompt, apiKey); out != "" {
+			llmDesc := truncateWords(strings.TrimRight(out, "."), 10)
+			if llmDesc != "" {
+				_ = st.SetShortDesc(sp.ticket, llmDesc)
+			}
+		}
+	}()
 
 	hooks := runner.Hooks{
 		Logf:    logf,
@@ -254,7 +293,8 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
-		Store: st, Images: sp.images, Base: resolvedBase,
+		Store: st, Images: sp.images, Base: resolvedBase, Branch: sp.branch,
+		ReviewPlan: reviewPlan, FromPlan: runFromPlan,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in
 	// the TUI/`agent logs` even when stdout/stderr is discarded (TUI-launched).

@@ -22,9 +22,13 @@ type SDKPaths struct {
 	Emulator string // e.g. /Users/.../sdk/emulator/emulator
 }
 
-// ResolvePaths resolves adb and emulator from sdkRoot, falling back to PATH
-// if the SDK-relative paths don't exist.
+// ResolvePaths resolves adb and emulator from sdkRoot. When sdkRoot is empty
+// (android_sdk_path not configured) it auto-detects the SDK, then falls back to
+// PATH if the SDK-relative paths don't exist.
 func ResolvePaths(sdkRoot string) SDKPaths {
+	if sdkRoot == "" {
+		sdkRoot = detectSDKRoot()
+	}
 	resolve := func(rel, name string) string {
 		if sdkRoot != "" {
 			p := filepath.Join(sdkRoot, rel)
@@ -41,6 +45,56 @@ func ResolvePaths(sdkRoot string) SDKPaths {
 		ADB:      resolve(filepath.Join("platform-tools", "adb"), "adb"),
 		Emulator: resolve(filepath.Join("emulator", "emulator"), "emulator"),
 	}
+}
+
+// detectSDKRoot finds the Android SDK when android_sdk_path isn't configured:
+// $ANDROID_HOME / $ANDROID_SDK_ROOT first, then the standard per-OS location.
+// Returns "" when nothing is found (callers then fall back to PATH).
+func detectSDKRoot() string {
+	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
+		if v := os.Getenv(env); v != "" {
+			if _, err := os.Stat(v); err == nil {
+				return v
+			}
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	for _, rel := range []string{
+		"Library/Android/sdk",       // macOS
+		"Android/Sdk",               // Linux
+		"AppData/Local/Android/Sdk", // Windows
+	} {
+		p := filepath.Join(home, rel)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// ListAVDs returns the names of the installed AVDs via `emulator -list-avds`
+// (nil when the emulator binary is missing or there are none).
+func ListAVDs(p SDKPaths) []string {
+	out, err := exec.Command(p.Emulator, "-list-avds").Output()
+	if err != nil {
+		return nil
+	}
+	return parseAVDList(string(out))
+}
+
+// parseAVDList extracts AVD names from `emulator -list-avds` output: one name
+// per non-blank line.
+func parseAVDList(out string) []string {
+	var avds []string
+	for _, line := range strings.Split(out, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			avds = append(avds, s)
+		}
+	}
+	return avds
 }
 
 // AlreadyRunning reports whether any Android emulator is currently connected.

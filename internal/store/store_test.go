@@ -112,3 +112,135 @@ func TestSetSessionIDRoundTrip(t *testing.T) {
 		t.Errorf("SessionID = %q, want sess-abc-123", got.SessionID)
 	}
 }
+
+func TestSetShortDescRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := s.Claim("PROJ-20", "/repo", "summary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetShortDesc("PROJ-20", "upload paper PDF to storage"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("PROJ-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ShortDesc != "upload paper PDF to storage" {
+		t.Errorf("ShortDesc = %q, want %q", got.ShortDesc, "upload paper PDF to storage")
+	}
+}
+
+func TestSetReviewPlanRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := s.Claim("PROJ-30", "/repo", "x"); err != nil {
+		t.Fatal(err)
+	}
+	// Default is false.
+	got, err := s.Get("PROJ-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReviewPlan {
+		t.Error("ReviewPlan should default to false")
+	}
+	// Set true, read back.
+	if err := s.SetReviewPlan("PROJ-30", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get("PROJ-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ReviewPlan {
+		t.Error("ReviewPlan should be true after SetReviewPlan(true)")
+	}
+	// Clear back to false.
+	if err := s.SetReviewPlan("PROJ-30", false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get("PROJ-30")
+	if got.ReviewPlan {
+		t.Error("ReviewPlan should be false after SetReviewPlan(false)")
+	}
+}
+
+// StatePlanReview is an idle state: it must not count as active, so the driver
+// process exits and a re-run (approve/feedback) is allowed.
+func TestPlanReviewNotActive(t *testing.T) {
+	if IsActive(StatePlanReview) {
+		t.Error("StatePlanReview must not be an active state")
+	}
+}
+
+// The review_plan migration is idempotent (a second Open of the same DB must not
+// fail, and round-trips still work).
+func TestReviewPlanMigrationIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open failed: %v", err)
+	}
+	defer s2.Close()
+
+	if _, err := s2.Claim("PROJ-31", "/repo", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.SetReviewPlan("PROJ-31", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s2.Get("PROJ-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ReviewPlan {
+		t.Error("ReviewPlan after reopen should be true")
+	}
+}
+
+func TestShortDescMigrationIdempotent(t *testing.T) {
+	// Opening the same DB twice should not fail (ALTER TABLE short_desc is idempotent
+	// because the error is silently ignored on the second call).
+	path := filepath.Join(t.TempDir(), "state.db")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open failed: %v", err)
+	}
+	defer s2.Close()
+
+	// Basic operations work on the re-opened DB.
+	if _, err := s2.Claim("PROJ-21", "/repo", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.SetShortDesc("PROJ-21", "short gist"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s2.Get("PROJ-21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ShortDesc != "short gist" {
+		t.Errorf("ShortDesc after reopen = %q", got.ShortDesc)
+	}
+}

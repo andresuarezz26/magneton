@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
@@ -65,24 +69,37 @@ func agentActions(s store.Session) []paletteItem {
 	if s.State == "awaiting-answer" {
 		items = append(items, paletteItem{"answer", "Answer the questions", "reply, then the agent resumes"})
 	}
+	// Plan-review is an idle state (neither active nor stuck): the plan is ready
+	// and the human approves it or sends it back for a re-plan.
+	if s.State == store.StatePlanReview {
+		items = append(items,
+			paletteItem{"view-plan", "View the plan", "read the full plan in a scrollable view"},
+			paletteItem{"approve-plan", "Approve plan & implement", "continue: implement → verify → PR"},
+			paletteItem{"plan-feedback", "Give feedback & re-plan", "tell it what to change; it plans again"},
+		)
+	}
+	// The plan .md (archived in ~/.magneton/plans/, or derivable from the
+	// worktree) opens externally in whatever handles markdown.
+	if planAvailable(s) {
+		items = append(items, paletteItem{"plan-md", "View Plan", "open the plan .md file"})
+	}
 	// Pause a live run: stop the agent but keep the worktree, dropping the ticket
 	// to NEEDS YOU so you can take over by hand (then Resume / Open a PR).
 	if active {
 		items = append(items, paletteItem{"pause", "Pause (move to NEEDS YOU)", "stop the running agent but keep the worktree so you can take over"})
 	}
 	if hasWT {
-		if stuck {
-			items = append(items,
-				paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"},
-				paletteItem{"ship", "Open a PR", "skip verification - commit + push + PR (when the gate itself is unreliable here)"},
-			)
-		}
-		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
+		// Order most-used first: hand-off (Claude / Studio), then Open a PR, Stop,
+		// and finally Resume (the least common recovery path).
 		// "Open in Claude Code" resumes the agent's session. Only offer it when no
 		// run is active - otherwise the headless agent and this interactive session
 		// would both write to the same session on disk and diverge.
 		if !active {
 			items = append(items, paletteItem{"claude", "Open in Claude Code", "resume the agent's session in a new terminal"})
+		}
+		items = append(items, paletteItem{"studio", "Open Android Studio", "open the worktree as a project"})
+		if stuck {
+			items = append(items, paletteItem{"ship", "Open a PR", "skip verification - commit + push + PR (when the gate itself is unreliable here)"})
 		}
 	} else if stuck || done {
 		// Worktree is gone — only a fresh run is possible.
@@ -94,22 +111,79 @@ func agentActions(s store.Session) []paletteItem {
 	if !done && s.State != store.StateStopped {
 		items = append(items, paletteItem{"stop", "Stop & clean up", "kill the process and remove the worktree"})
 	}
+	// Resume re-runs verification on a hand-fixed worktree; least-common, so last.
+	if hasWT && stuck {
+		items = append(items, paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"})
+	}
 	return items
+}
+
+// planAvailable reports whether a plan can be shown for the session: the durable
+// archive in ~/.magneton/plans/ or a plan.json still in the worktree. Cheap
+// stat-only checks - this runs on every palette open.
+func planAvailable(s store.Session) bool {
+	if _, err := os.Stat(paths.PlanMDFor(s.Ticket)); err == nil {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(paths.WorktreeFor(s.Repo, s.Ticket), ".agent", "plan.json"))
+	return err == nil
+}
+
+// planOpenedMsg is returned after handing the plan .md to the OS opener.
+type planOpenedMsg struct {
+	path string
+	err  error
+}
+
+// openPlanMD opens the ticket's plan .md externally (macOS `open` / linux
+// `xdg-open`). The durable archive is preferred; when only the worktree's
+// plan.json exists (runs from before the archive existed) the .md is generated
+// into ~/.magneton/plans/ first.
+func openPlanMD(s store.Session) tea.Cmd {
+	return func() tea.Msg {
+		path := paths.PlanMDFor(s.Ticket)
+		if _, err := os.Stat(path); err != nil {
+			plan, rerr := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket))
+			if rerr != nil || plan == nil {
+				return planOpenedMsg{err: fmt.Errorf("no plan found for %s", s.Ticket)}
+			}
+			title := s.Ticket
+			if s.Summary != "" {
+				title += " · " + s.Summary
+			}
+			if err := os.MkdirAll(paths.Plans(), 0o755); err != nil {
+				return planOpenedMsg{err: err}
+			}
+			if err := os.WriteFile(path, []byte(agent.PlanMarkdown(title, plan)), 0o644); err != nil {
+				return planOpenedMsg{err: err}
+			}
+		}
+		opener := "xdg-open"
+		if runtime.GOOS == "darwin" {
+			opener = "open"
+		}
+		if err := exec.Command(opener, path).Start(); err != nil {
+			return planOpenedMsg{path: path, err: err}
+		}
+		return planOpenedMsg{path: path}
+	}
 }
 
 // claudeClosedMsg is returned after launching a Claude Code terminal.
 type claudeClosedMsg struct{ err error }
 
-// openClaude opens a NEW terminal window running an interactive Claude Code
-// session in the ticket's worktree, resuming the agent's stored session when
-// there is one. The dashboard keeps running.
+// openClaude opens an interactive Claude Code session in the ticket's worktree in
+// a new Terminal window. When the session has a stored ID the history is resumed
+// so the user can review what the agent did. The dashboard keeps running.
 func (m monitorModel) openClaude(s store.Session) tea.Cmd {
-	cmdline := "cd " + shellQuote(paths.WorktreeFor(s.Repo, s.Ticket)) + " && claude"
+	worktree := paths.WorktreeFor(s.Repo, s.Ticket)
+	cmdline := "cd " + shellQuote(worktree) + " && claude"
 	if s.SessionID != "" {
 		// Resumed sessions keep the model they were saved with (per Claude Code
-		// docs), so without an override the interactive window would reopen on
-		// whatever model the headless stage ran - not what the user expects.
-		// "--model default" clears that and reverts to the user's/org's default.
+		// docs); "--model default" reverts to the user's/org's default so the
+		// interactive window isn't stuck on the headless stage's model. Do NOT add
+		// --append-system-prompt here: alongside --resume it drops the restored
+		// conversation history, defeating the point of resuming.
 		cmdline += " --resume " + shellQuote(s.SessionID) + " --model default"
 	}
 	// When the ticket is stuck (needs-you/failed/stopped) the user opens this
@@ -123,10 +197,39 @@ func (m monitorModel) openClaude(s store.Session) tea.Cmd {
 	if self, err := os.Executable(); err == nil && stuck {
 		cmdline += "; " + shellQuote(self) + " run " + shellQuote(s.Ticket) + " --resume"
 	}
-	script := "tell application \"Terminal\"\n\tdo script \"" + cmdline + "\"\n\tactivate\nend tell"
-	return func() tea.Msg {
-		return claudeClosedMsg{err: exec.Command("osascript", "-e", script).Start()}
+	// Window title: "TICKET-1 · ai/ticket-1-branch" (or just the ticket when no branch yet).
+	title := s.Ticket
+	if s.Branch != "" {
+		title += " · " + s.Branch
 	}
+	// `do script` with no target always opens a NEW Terminal window and runs the
+	// command there. Simple and reliable.
+	safeCmd := asEscapeAS(cmdline)
+	safeTitle := asEscapeAS(title)
+	script := "tell application \"Terminal\"\n" +
+		"\tactivate\n" +
+		"\tset t to do script \"" + safeCmd + "\"\n" +
+		"\ttry\n" +
+		"\t\tset custom title of t to \"" + safeTitle + "\"\n" +
+		"\tend try\n" +
+		"end tell"
+	return func() tea.Msg {
+		// Run (not Start) so an AppleScript failure actually surfaces instead of
+		// silently "succeeding". osascript returns as soon as the window is open;
+		// it does not wait for the claude session.
+		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+		if err != nil {
+			return claudeClosedMsg{err: fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))}
+		}
+		return claudeClosedMsg{}
+	}
+}
+
+// asEscapeAS escapes a string for embedding inside an AppleScript double-quoted literal.
+func asEscapeAS(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }
 
 // doAction runs an action by id. The Enter menu and the keyboard shortcuts both
@@ -137,9 +240,35 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "answer":
 		if s := m.selected(); s != nil && s.State == "awaiting-answer" {
 			m.answering = true
-			m.input = ""
 			m.answerKey = s.Ticket
+			m.answerAtoms = nil
+			m.answerCursor = 0
 			m.notice = ""
+		}
+	case "view-plan":
+		if s := m.selected(); s != nil {
+			return m.openPlanView(*s)
+		}
+	case "plan-md":
+		if s := m.selected(); s != nil {
+			m.notice = "opening plan for " + s.Ticket + "…"
+			return m, openPlanMD(*s)
+		}
+	case "approve-plan":
+		if s := m.selected(); s != nil {
+			m.view = viewDashboard // leave the plan viewer; the run resumes now
+			m.notice = "approving plan for " + s.Ticket + " - implementing…"
+			arg := s.Ticket
+			if s.SourcePath != "" {
+				arg = s.SourcePath
+			}
+			return m, m.spawnRun(arg, "--from-plan")
+		}
+	case "plan-feedback":
+		// Feedback lives inside the full-screen plan viewer so the plan stays
+		// visible while the user types corrections.
+		if s := m.selected(); s != nil {
+			return m.openPlanFeedback(*s)
 		}
 	case "studio":
 		if s := m.selected(); s != nil {
@@ -192,18 +321,33 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "stop":
 		if s := m.selected(); s != nil {
 			m.confirming = s.Ticket
+			m.confirmCursor = 0
 			m.notice = ""
 		}
 	// --- global ---
 	case "run":
-		m.view = viewRunMethod
 		m.runMode = ""
 		m.runMethodCursor = 0
 		m.runText = ""
 		m.runTickets = nil
 		m.runIDPrompt = -1
+		m.runBranchPrompt = -1
 		m.runImgPrompt = -1
+		m.promptCursor = 0
+		m.runReviewPrompt = -1
 		m.notice = ""
+		// With a single input method (no Jira configured) the picker is just an
+		// extra keystroke - jump straight into that method's input.
+		if methods := m.runMethods(); len(methods) == 1 {
+			m.runMode = methods[0].mode
+			m.view = viewRunInput
+			if m.runMode == "content" {
+				m = m.withContentEditor()
+				return m, textarea.Blink
+			}
+		} else {
+			m.view = viewRunMethod
+		}
 	case "doctor":
 		m.notice = "running doctor…"
 		return m, m.runDoctor()
@@ -217,9 +361,15 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 	case "daemon-stop":
 		m.notice = "stopping daemon…"
 		return m, m.stopDaemon()
-	case "menu":
+	case "menu": // the ":" command menu - agent actions + global commands
 		m.view = viewPalette
 		m.paletteCursor = 0
+		m.paletteAgentOnly = false
+		m.notice = ""
+	case "agent-menu": // Enter on an agent row - only that agent's actions
+		m.view = viewPalette
+		m.paletteCursor = 0
+		m.paletteAgentOnly = true
 		m.notice = ""
 	case "refresh":
 		m.reload()

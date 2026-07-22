@@ -36,6 +36,9 @@ type Task struct {
 	Store       *store.Store // optional; enables emulator coordination
 	Images      []string     // image files to make the agent see (pasted-content flow)
 	Base        string       // bare base branch name for stacked diffs; "" = default
+	Branch      string       // exact branch name (user-confirmed at creation); "" = derive from the repo pattern
+	ReviewPlan  bool         // pause after the plan stage for human approval (plan-review gate)
+	FromPlan    bool         // skip planning: implement straight from the existing plan.json
 }
 
 // Hooks let the caller observe and react. Any field may be nil.
@@ -79,50 +82,60 @@ func Run(t Task, h Hooks) Outcome {
 	}
 
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-	).Replace(repo.Branch)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
 
 	// 1. Provision an isolated worktree (Decision 7).
 	setState(store.StatePlanning, 0)
-	// Resolve the stacked base: the flag wins, but on a plain re-run (no --base)
-	// fall back to the value persisted at creation time so re-running a stacked
-	// ticket doesn't silently reset it to origin/<default> and drop the parent's
-	// commits. (finishShip reads the same stored value for the PR base.)
-	stackBase := t.Base
-	if stackBase == "" && t.Store != nil {
-		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
-			stackBase = sess.BaseBranch
-		}
-	}
-	// Resolve the base ref: prefer a local branch (covers in-progress parents),
-	// then fall back to origin/<name>, then origin/<default>. Validate before
-	// creating the worktree so a bad base surfaces a clear error rather than a
-	// raw git message.
-	baseRef := "origin/" + func() string {
-		if repo.Base != "" {
-			return repo.Base
-		}
-		return git.DefaultBranch(repo.Path)
-	}()
-	if stackBase != "" {
-		if git.RefExists(repo.Path, stackBase) {
-			baseRef = stackBase // local branch (e.g. in-progress parent)
-		} else if git.RefExists(repo.Path, "origin/"+stackBase) {
-			baseRef = "origin/" + stackBase
-		} else {
+	if t.FromPlan {
+		// Approve path: REUSE the worktree the human reviewed. CreateWorktree
+		// removes and recreates the dir (os.RemoveAll), which would destroy the
+		// reviewed .agent/plan.json that --from-plan implements from.
+		if !worktreeReady(worktree) {
+			logf("[%s] needs-you: approve requested but the reviewed worktree is gone", t.Ticket)
 			setState(store.StateNeedsYou, 0)
-			return Outcome{State: store.StateNeedsYou,
-				Err: fmt.Errorf("stack base %q: no local or remote branch found", stackBase)}
+			needsYouComment("approve requested but the reviewed worktree is gone - re-run the ticket to plan again")
+			return Outcome{State: store.StateNeedsYou}
 		}
-	}
-	logf("[%s] worktree %s on %s (base: %s)", t.Ticket, worktree, branch, baseRef)
-	if err := git.CreateWorktree(repo.Path, worktree, branch, baseRef); err != nil {
-		setState(store.StateFailed, 0)
-		return Outcome{State: store.StateFailed, Err: fmt.Errorf("create worktree: %w", err)}
+		logf("[%s] from-plan: reusing the reviewed worktree %s on %s", t.Ticket, worktree, branch)
+	} else {
+		// Resolve the stacked base: the flag wins, but on a plain re-run (no --base)
+		// fall back to the value persisted at creation time so re-running a stacked
+		// ticket doesn't silently reset it to origin/<default> and drop the parent's
+		// commits. (finishShip reads the same stored value for the PR base.)
+		stackBase := t.Base
+		if stackBase == "" && t.Store != nil {
+			if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil {
+				stackBase = sess.BaseBranch
+			}
+		}
+		// Resolve the base ref: prefer a local branch (covers in-progress parents),
+		// then fall back to origin/<name>, then origin/<default>. Validate before
+		// creating the worktree so a bad base surfaces a clear error rather than a
+		// raw git message.
+		baseRef := "origin/" + func() string {
+			if repo.Base != "" {
+				return repo.Base
+			}
+			return git.DefaultBranch(repo.Path)
+		}()
+		if stackBase != "" {
+			if git.RefExists(repo.Path, stackBase) {
+				baseRef = stackBase // local branch (e.g. in-progress parent)
+			} else if git.RefExists(repo.Path, "origin/"+stackBase) {
+				baseRef = "origin/" + stackBase
+			} else {
+				setState(store.StateNeedsYou, 0)
+				return Outcome{State: store.StateNeedsYou,
+					Err: fmt.Errorf("stack base %q: no local or remote branch found", stackBase)}
+			}
+		}
+		logf("[%s] worktree %s on %s (base: %s)", t.Ticket, worktree, branch, baseRef)
+		if err := git.CreateWorktree(repo.Path, worktree, branch, baseRef); err != nil {
+			setState(store.StateFailed, 0)
+			return Outcome{State: store.StateFailed, Err: fmt.Errorf("create worktree: %w", err)}
+		}
 	}
 	if h.OnField != nil {
 		h.OnField(branch, worktree, "")
@@ -152,29 +165,51 @@ func Run(t Task, h Hooks) Outcome {
 		SettingsJSON: t.Cfg.SandboxSettingsJSON(),
 		Logf:         logf,
 	}
-	if _, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts); err != nil {
-		logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+	// On the approve path (--from-plan) we skip re-planning entirely and implement
+	// straight from the plan.json the human already reviewed in the worktree
+	// (.agent/ is git-excluded, so it survives the branch reset on re-provision).
+	if !t.FromPlan {
+		planSID, err := agent.Run(agent.BuildPlanPrompt(t.Ticket, t.Summary, desc), planOpts)
+		if err != nil {
+			logf("[%s] (warn) plan stage exited: %v", t.Ticket, err)
+		}
+		// Persist the plan session so "Open in Claude Code" on a ticket paused at
+		// the plan-review gate resumes into the planning conversation.
+		if planSID != "" && t.Store != nil {
+			_ = t.Store.SetSessionID(t.Ticket, planSID)
+		}
 	}
 
 	plan, err := agent.ReadPlan(worktree)
 	if err != nil {
+		if t.FromPlan {
+			logf("[%s] needs-you: approve requested but no plan.json found in the worktree (%v)", t.Ticket, err)
+			setState(store.StateNeedsYou, 0)
+			needsYouComment("approve requested but no plan.json found in the worktree")
+			return Outcome{State: store.StateNeedsYou}
+		}
 		logf("[%s] needs-you: plan stage did not produce plan.json (%v)", t.Ticket, err)
 		setState(store.StateNeedsYou, 0)
 		needsYouComment(fmt.Sprintf("The plan stage failed to produce a plan - the ticket may be too ambiguous or the codebase too complex to analyse automatically.\n\nError: `%v`", err))
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
+	archivePlan(t.Ticket, t.Summary, plan, logf)
 
 	// Start emulator in the background, concurrent with the implement stage.
 	// We do this right after reading the plan so boot time overlaps with Claude.
-	needsEmu := plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
 	sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+	avdName := ""
+	if plan.NeedsEmulator {
+		avdName = resolveAVD(t.Cfg.AVDName, sdkPaths, logf)
+	}
+	needsEmu := avdName != "" && t.Store != nil
 	var emulatorReady chan error
 	if needsEmu {
-		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		_ = t.Store.RegisterEmulator(avdName)
 		emulatorReady = make(chan error, 1)
-		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, emulatorReady)
-		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, t.Cfg.AVDName, sdkPaths.ADB)
+		go bootOrWait(avdName, sdkPaths, t.Store, logf, emulatorReady)
+		logf("[%s] emulator boot started in background (avd: %s, adb: %s)", t.Ticket, avdName, sdkPaths.ADB)
 	}
 
 	// 3. CLARIFY - always post plan to Jira; stop if there are blocking questions.
@@ -187,13 +222,26 @@ func Run(t Task, h Hooks) Outcome {
 			h.Comment(comment)
 		}
 	}
-	if len(plan.Questions) > 0 {
-		logf("[%s] awaiting-answer: %d question(s) posted to ticket", t.Ticket, len(plan.Questions))
-		for i, q := range plan.Questions {
-			logf("[%s]   Q%d: %s", t.Ticket, i+1, q)
+	// Questions always win: even with the plan-review gate on, blocking questions
+	// stop first so the human answers before there's a plan worth reviewing.
+	// On the approve path (--from-plan) the human has already seen the plan, so
+	// both the questions gate and the review gate are skipped.
+	if !t.FromPlan {
+		if len(plan.Questions) > 0 {
+			logf("[%s] awaiting-answer: %d question(s) posted to ticket", t.Ticket, len(plan.Questions))
+			for i, q := range plan.Questions {
+				logf("[%s]   Q%d: %s", t.Ticket, i+1, q)
+			}
+			setState(store.StateAwaiting, 0)
+			return Outcome{State: store.StateAwaiting}
 		}
-		setState(store.StateAwaiting, 0)
-		return Outcome{State: store.StateAwaiting}
+		// Plan-review gate: pause here so the human can approve or give feedback in
+		// the dashboard. The plan is already persisted in .agent/plan.json.
+		if t.ReviewPlan {
+			logf("[%s] plan-review: plan ready - approve or give feedback in the dashboard", t.Ticket)
+			setState(store.StatePlanReview, 0)
+			return Outcome{State: store.StatePlanReview}
+		}
 	}
 
 	// 4. IMPLEMENT stage - fast model, full tools, plan injected.
@@ -278,14 +326,14 @@ func Run(t Task, h Hooks) Outcome {
 			needsEmu = false
 		} else {
 			for {
-				ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket)
+				ok, _ := t.Store.AcquireEmulator(avdName, t.Ticket)
 				if ok {
 					break
 				}
 				logf("[%s] emulator busy, waiting…", t.Ticket)
 				time.Sleep(5 * time.Second)
 			}
-			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+			defer func() { _ = t.Store.ReleaseEmulator(avdName) }()
 			logf("[%s] emulator acquired", t.Ticket)
 		}
 	}
@@ -339,6 +387,13 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	if report != nil {
 		archiveReport(t.Ticket, report, logf)
 	}
+	// Archive the self-review verdict beside the report - like plan/report, its
+	// durable home is ~/.magneton, never the target repo.
+	if review, err := agent.ReadReview(worktree); err == nil && review != nil {
+		if data, jerr := json.MarshalIndent(review, "", "  "); jerr == nil {
+			_ = os.WriteFile(filepath.Join(paths.Reports(), t.Ticket+"-review.json"), data, 0o644)
+		}
+	}
 	git.UntrackAgentDir(worktree)
 
 	if git.HasChanges(worktree) {
@@ -391,6 +446,13 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	if report != nil && strings.TrimSpace(report.PRBody) != "" {
 		body = report.PRBody
 		logf("[%s] PR body from repo template", t.Ticket)
+		// Completeness repair: restore any sections the LLM dropped.
+		if tmpl := vcs.ReadRepoTemplate(worktree); tmpl != "" {
+			if missing := vcs.MissingSections(tmpl, body); len(missing) > 0 {
+				logf("[%s] PR body was missing %d template section(s) - restored from template", t.Ticket, len(missing))
+				body = vcs.RepairSections(tmpl, body, missing)
+			}
+		}
 	} else {
 		b, err := vcs.RenderPRBody(pr)
 		if err != nil {
@@ -398,7 +460,8 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 		}
 		body = b
 	}
-	prURL, err := vcs.OpenPR(worktree, base, fmt.Sprintf("[%s] %s", t.Ticket, t.Summary), body)
+	prTitle := prTitleFor(worktree, t.Ticket, t.Summary)
+	prURL, err := vcs.OpenPR(worktree, base, prTitle, body)
 	if err != nil {
 		setState(store.StateFailed, attempts-1)
 		return Outcome{State: store.StateFailed, Err: err}
@@ -433,6 +496,28 @@ func archiveReport(ticket string, r *agent.Report, logf func(string, ...interfac
 	}
 	if err := os.WriteFile(paths.ReportFor(ticket), b, 0o644); err != nil {
 		logf("[%s] (warn) could not archive report: %v", ticket, err)
+	}
+}
+
+// archivePlan persists the plan into magneton's own home right after planning:
+// ~/.magneton/plans/<ticket>.md (what the TUI's "View Plan" opens) plus the raw
+// .json. The worktree's .agent/ scratch stays git-excluded and disposable, so
+// the plan never lands in the target repo. Best-effort.
+func archivePlan(ticket, summary string, p *agent.Plan, logf func(string, ...interface{})) {
+	if err := os.MkdirAll(paths.Plans(), 0o755); err != nil {
+		logf("[%s] (warn) could not create plans dir: %v", ticket, err)
+		return
+	}
+	title := ticket
+	if summary != "" {
+		title += " · " + summary
+	}
+	if err := os.WriteFile(paths.PlanMDFor(ticket), []byte(agent.PlanMarkdown(title, p)), 0o644); err != nil {
+		logf("[%s] (warn) could not archive plan: %v", ticket, err)
+		return
+	}
+	if data, err := json.MarshalIndent(p, "", "  "); err == nil {
+		_ = os.WriteFile(paths.PlanJSONFor(ticket), data, 0o644)
 	}
 }
 
@@ -494,10 +579,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-	).Replace(repo.Branch)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -514,27 +596,31 @@ func resumeShip(t Task, h Hooks) Outcome {
 	plan, _ := agent.ReadPlan(worktree)
 	report, _ := agent.ReadReport(worktree)
 
-	needsEmu := plan != nil && plan.NeedsEmulator && t.Cfg.AVDName != "" && t.Store != nil
+	sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
+	avdName := ""
+	if plan != nil && plan.NeedsEmulator {
+		avdName = resolveAVD(t.Cfg.AVDName, sdkPaths, logf)
+	}
+	needsEmu := avdName != "" && t.Store != nil
 
 	// Boot + acquire the emulator only if the original plan needed instrumented tests.
 	if needsEmu {
-		sdkPaths := build.ResolvePaths(t.Cfg.AndroidSDKPath)
-		_ = t.Store.RegisterEmulator(t.Cfg.AVDName)
+		_ = t.Store.RegisterEmulator(avdName)
 		ready := make(chan error, 1)
-		go bootOrWait(t.Cfg.AVDName, sdkPaths, t.Store, logf, ready)
+		go bootOrWait(avdName, sdkPaths, t.Store, logf, ready)
 		logf("[%s] waiting for emulator…", t.Ticket)
 		if err := <-ready; err != nil {
 			logf("[%s] (warn) emulator unavailable: %v - falling back to unit tests", t.Ticket, err)
 			needsEmu = false
 		} else {
 			for {
-				if ok, _ := t.Store.AcquireEmulator(t.Cfg.AVDName, t.Ticket); ok {
+				if ok, _ := t.Store.AcquireEmulator(avdName, t.Ticket); ok {
 					break
 				}
 				logf("[%s] emulator busy, waiting…", t.Ticket)
 				time.Sleep(5 * time.Second)
 			}
-			defer func() { _ = t.Store.ReleaseEmulator(t.Cfg.AVDName) }()
+			defer func() { _ = t.Store.ReleaseEmulator(avdName) }()
 		}
 	}
 	anthropicKey := secrets.Get(secrets.Anthropic)
@@ -576,10 +662,7 @@ func shipOnly(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := strings.NewReplacer(
-		"{ticket}", strings.ToLower(t.Ticket),
-		"{slug}", slugify(t.Summary),
-	).Replace(repo.Branch)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -616,6 +699,23 @@ func resumeNeedsYou(t Task, h Hooks, setState func(string, int), logf func(strin
 // bootOrWait either reuses an already-running emulator, starts a new one, or
 // waits for another runner that is already booting it. It sends exactly one
 // value on done when the emulator reaches state=ready or on error.
+// resolveAVD picks the AVD to use for instrumented tests: the configured one
+// (config avd_name) when set, otherwise the first AVD found via
+// `emulator -list-avds` - so instrumented tests work with zero config for anyone
+// who has at least one AVD. Returns "" when none is available (the caller then
+// falls back to unit tests).
+func resolveAVD(configured string, p build.SDKPaths, logf func(string, ...interface{})) string {
+	if configured != "" {
+		return configured
+	}
+	avds := build.ListAVDs(p)
+	if len(avds) == 0 {
+		return ""
+	}
+	logf("[emulator] no avd_name configured - auto-detected AVD %q", avds[0])
+	return avds[0]
+}
+
 func bootOrWait(avdName string, p build.SDKPaths, st *store.Store, logf func(string, ...interface{}), done chan<- error) {
 	// If any emulator is already attached via adb, skip booting entirely.
 	if build.AlreadyRunning(p) {
@@ -711,6 +811,47 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 	return t.Description +
 		"\n\nAttached screenshots - use the Read tool to view each before planning and implementing:\n- " +
 		strings.Join(refs, "\n- ")
+}
+
+// branchFor picks the branch for a run: an explicit override (the name the user
+// confirmed at creation, via --branch) wins; else the branch recorded by a
+// previous run, so re-runs and resume/ship keep a customized name instead of
+// silently recomputing the pattern; else the repo pattern.
+func branchFor(t Task) string {
+	if t.Branch != "" {
+		return t.Branch
+	}
+	if t.Store != nil {
+		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil && sess.Branch != "" {
+			return sess.Branch
+		}
+	}
+	return ResolveBranch(t.Repo.Branch, t.Ticket, t.Summary)
+}
+
+// ResolveBranch fills a repo's branch pattern for a ticket, substituting the
+// {ticket} (lowercased id) and {slug} (kebab-case title) placeholders. Exported
+// so the TUI can pre-fill the creation-time branch field with the same result.
+func ResolveBranch(pattern, ticket, summary string) string {
+	return strings.NewReplacer(
+		"{ticket}", strings.ToLower(ticket),
+		"{slug}", slugify(summary),
+	).Replace(pattern)
+}
+
+// prTitleFor builds the PR title, prepending a [feat]/[bug]/[chore] prefix
+// when the ticket's plan.json records a type.
+func prTitleFor(worktree, ticket, summary string) string {
+	prefix := ""
+	if p, err := agent.ReadPlan(worktree); err == nil && p != nil {
+		switch p.Type {
+		case "feature":
+			prefix = "[feat]"
+		case "bug", "chore":
+			prefix = "[" + p.Type + "]"
+		}
+	}
+	return fmt.Sprintf("%s[%s] %s", prefix, ticket, summary)
 }
 
 func slugify(s string) string {

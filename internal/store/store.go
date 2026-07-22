@@ -24,6 +24,10 @@ const (
 	StateReview    = "review"
 	StateNeedsYou  = "needs-you"
 	StateFailed    = "failed"
+	// StatePlanReview is the opt-in pause after the plan stage: the plan is ready
+	// but the human hasn't approved it yet. It's an idle state (NOT in IsActive)
+	// so the driver process has exited and a re-run is allowed, like awaiting-answer.
+	StatePlanReview = "plan-review"
 	// Terminal post-review states set when the PR is resolved (Decision 7 cleanup).
 	StateMerged = "merged"
 	StateClosed = "closed"
@@ -66,6 +70,8 @@ type Session struct {
 	PID        int    // OS pid of the process driving this session (0 = unknown)
 	SourcePath string // .md file path for local tickets; empty for Jira tickets
 	BaseBranch string // stacked-diff base branch name (bare, no origin/ prefix); "" = default
+	ShortDesc  string // LLM-generated <10-word gist shown in the dashboard third column
+	ReviewPlan bool   // pause after the plan stage so the human can approve/give feedback
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
@@ -112,7 +118,9 @@ func Open(path string) (*Store, error) {
 	db.Exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE sessions ADD COLUMN pid INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE sessions ADD COLUMN source_path TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE sessions ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN short_desc TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN review_plan INTEGER NOT NULL DEFAULT 0`)
 	return &Store{db: db}, nil
 }
 
@@ -194,10 +202,35 @@ func (s *Store) SetFields(ticket, branch, worktree, prURL string) error {
 	return err
 }
 
+// SetShortDesc persists a LLM-generated short description for the dashboard.
+// Called at run start (and again when the async LLM upgrade finishes), so stale
+// rows from prior failed runs are always refreshed.
+func (s *Store) SetShortDesc(ticket, desc string) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET short_desc=?, updated_at=? WHERE ticket=?`,
+		desc, time.Now().Unix(), ticket,
+	)
+	return err
+}
+
+// SetReviewPlan records whether this ticket should pause after the plan stage.
+// Persisted so TUI re-spawns (answer/feedback) keep the gate on.
+func (s *Store) SetReviewPlan(ticket string, v bool) error {
+	iv := 0
+	if v {
+		iv = 1
+	}
+	_, err := s.db.Exec(
+		`UPDATE sessions SET review_plan=?, updated_at=? WHERE ticket=?`,
+		iv, time.Now().Unix(), ticket,
+	)
+	return err
+}
+
 // Get returns one session.
 func (s *Store) Get(ticket string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch, short_desc, review_plan
 		 FROM sessions WHERE ticket=?`, ticket)
 	return scan(row)
 }
@@ -205,7 +238,7 @@ func (s *Store) Get(ticket string) (*Session, error) {
 // List returns all sessions, most recently updated first.
 func (s *Store) List() ([]Session, error) {
 	rows, err := s.db.Query(
-		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch
+		`SELECT ticket, repo, state, retries, branch, worktree, pr_url, summary, session_id, pid, source_path, created_at, updated_at, base_branch, short_desc, review_plan
 		 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -304,11 +337,13 @@ type scanner interface {
 func scan(r scanner) (*Session, error) {
 	var s Session
 	var created, updated int64
+	var reviewPlan int
 	if err := r.Scan(&s.Ticket, &s.Repo, &s.State, &s.Retries, &s.Branch,
 		&s.Worktree, &s.PRURL, &s.Summary, &s.SessionID, &s.PID, &s.SourcePath,
-		&created, &updated, &s.BaseBranch); err != nil {
+		&created, &updated, &s.BaseBranch, &s.ShortDesc, &reviewPlan); err != nil {
 		return nil, err
 	}
+	s.ReviewPlan = reviewPlan != 0
 	s.CreatedAt = time.Unix(created, 0)
 	s.UpdatedAt = time.Unix(updated, 0)
 	return &s, nil
