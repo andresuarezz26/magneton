@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -77,7 +78,7 @@ func launchHub() error {
 
 	m := monitorModel{
 		store: st, jira: jc, tel: tel, selfPath: self, view: initialView,
-		runIDPrompt: -1, runImgPrompt: -1, runStackPrompt: -1, runReviewPrompt: -1,
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1, runStackPrompt: -1, runReviewPrompt: -1,
 	}
 	m.reload()
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -226,11 +227,19 @@ type monitorModel struct {
 	runMethodCursor  int             // cursor in the run-method picker
 	runText          string          // run-new typed buffer (a key/path/id being typed)
 	runTickets       []pendingTicket // accumulated ticket chips awaiting launch
-	runIDPrompt      int             // index of a content chip confirming its id; -1 = none
+	runIDPrompt      int             // index of a content chip confirming its ticket id; -1 = none
+	runBranchPrompt  int             // index of a content chip confirming its branch name; -1 = none
 	runImgPrompt     int             // index of a content chip attaching images; -1 = none
 	runStackPrompt   int             // index of a chip choosing its stack base; -1 = none
 	runReviewPrompt  int             // index of a chip choosing its plan-review toggle; -1 = none
 	reviewCursor     int             // cursor in the plan-review mini palette (0=Yes 1=No)
+	ticketLines      []string        // glamour-rendered ticket markdown (id/branch prompts + editor preview)
+	ticketScroll     int             // top visible row of ticketLines
+	promptCursor     int             // caret rune-index in the active id/branch prompt field
+	content          *textarea.Model // multi-line markdown editor for content mode; nil when inactive
+	contentPreview   bool            // content mode is showing the glamour preview instead of the editor
+	contentBar       bool            // focus is on the editor's action bar (Esc steps out to it)
+	contentBtn       int             // selected action-bar button (0=Continue 1=Preview 2=Discard)
 	stackBranches    []git.Branch    // loaded once when the stack picker opens
 	stackDefault     string          // repo's default branch name (main/master/…), for the default row
 	stackFilter      string          // search filter in the stack picker
@@ -340,6 +349,23 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// Same for the pasted ticket shown behind the id/branch prompts.
+		promptIdx := m.runIDPrompt
+		if promptIdx < 0 {
+			promptIdx = m.runBranchPrompt
+		}
+		if promptIdx >= 0 && promptIdx < len(m.runTickets) {
+			m.ticketLines = renderMarkdownLines(m.runTickets[promptIdx].body, m.paneWidth())
+			m.clampTicketScroll()
+		}
+		// And the content editor / its markdown preview.
+		if m.content != nil {
+			m.sizeContentEditor()
+			if m.contentPreview {
+				m.ticketLines = renderMarkdownLines(m.content.Value(), m.paneWidth())
+				m.clampTicketScroll()
+			}
+		}
 	case tickMsg:
 		m.reload()
 		return m, tick()
@@ -379,6 +405,8 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.view = viewDashboard
 		return m, nil
+	case ticketEditedMsg:
+		return m.applyTicketEdit(msg)
 	case runLaunchedMsg:
 		if msg.err != nil {
 			m.notice = "run failed: " + msg.err.Error()
@@ -392,6 +420,13 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = msg.action + " daemon: " + msg.err.Error()
 		} else {
 			m.notice = "daemon " + msg.action + "ed"
+		}
+		return m, nil
+	case planOpenedMsg:
+		if msg.err != nil {
+			m.notice = "view plan: " + msg.err.Error()
+		} else {
+			m.notice = "opened " + msg.path
 		}
 		return m, nil
 	case claudeClosedMsg:
@@ -959,10 +994,9 @@ func (m monitorModel) renderDashboardBody(w int) string {
 		if sel.BaseBranch != "" {
 			b.WriteString(dimStyle.Render("  stacked on: "+sel.BaseBranch) + "\n")
 		}
-		for _, ln := range whyLines(*sel) {
-			for _, seg := range wrapLine(ln, w) {
-				b.WriteString(whyStyle.Render(seg) + "\n")
-			}
+		whyRows := whyRowsFor(*sel, w)
+		for _, seg := range whyRows {
+			b.WriteString(whyStyle.Render(seg) + "\n")
 		}
 		if m.answering {
 			b.WriteString("\n  " + headerStyle.Render("answer "+m.answerKey) + "\n")
@@ -999,11 +1033,7 @@ func (m monitorModel) renderDashboardBody(w int) string {
 				}
 			}
 		} else {
-			whyRowCount := 0
-			for _, ln := range whyLines(*sel) {
-				whyRowCount += len(wrapLine(ln, w))
-			}
-			detailH := m.height - listLines - 10 - whyRowCount
+			detailH := m.height - listLines - 10 - len(whyRows)
 			if detailH < 3 {
 				detailH = 3
 			}
@@ -1060,42 +1090,20 @@ func (m monitorModel) frame(head, body, notice, bar string, w int) string {
 }
 
 // planMarkdownDoc builds a markdown document from a session's plan.json for the
-// full-screen viewer. Returns ok=false when there's no readable plan yet.
+// full-screen viewer, falling back to the durable ~/.magneton/plans/<ticket>.md
+// archive when the worktree is gone. Returns ok=false when there's no plan yet.
 func planMarkdownDoc(s store.Session) (string, bool) {
-	plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket))
-	if err != nil || plan == nil {
-		return "", false
-	}
-	var b strings.Builder
-	title := s.Ticket
-	if s.Summary != "" {
-		title += " · " + s.Summary
-	}
-	fmt.Fprintf(&b, "# %s\n\n", title)
-	if plan.Confidence != "" || plan.Type != "" {
-		fmt.Fprintf(&b, "**Confidence:** %s  ·  **Type:** %s\n\n", plan.Confidence, plan.Type)
-	}
-	if strings.TrimSpace(plan.Plan) != "" {
-		fmt.Fprintf(&b, "## Approach\n\n%s\n\n", plan.Plan)
-	}
-	if strings.TrimSpace(plan.Diagram) != "" {
-		fmt.Fprintf(&b, "## Diagram\n\n%s\n\n", plan.Diagram)
-	}
-	if len(plan.Steps) > 0 {
-		b.WriteString("## Steps\n\n")
-		for i, step := range plan.Steps {
-			fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+	if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
+		title := s.Ticket
+		if s.Summary != "" {
+			title += " · " + s.Summary
 		}
-		b.WriteString("\n")
+		return agent.PlanMarkdown(title, plan), true
 	}
-	if len(plan.Questions) > 0 {
-		b.WriteString("## Open questions\n\n")
-		for _, q := range plan.Questions {
-			fmt.Fprintf(&b, "- %s\n", q)
-		}
-		b.WriteString("\n")
+	if data, err := os.ReadFile(paths.PlanMDFor(s.Ticket)); err == nil {
+		return string(data), true
 	}
-	return b.String(), true
+	return "", false
 }
 
 // renderMarkdownLines renders markdown to styled terminal rows via glamour,
@@ -1430,21 +1438,31 @@ func whyLines(s store.Session) []string {
 	case "awaiting-answer":
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && len(plan.Questions) > 0 {
 			out := []string{fmt.Sprintf("▮ Needs you - press ↵ enter to answer %d question(s):", len(plan.Questions))}
+			// Cap count and length so many/verbose questions can't flood the pane.
+			const maxQuestions = 4
 			for i, q := range plan.Questions {
-				out = append(out, fmt.Sprintf("  Q%d %s", i+1, q))
+				if i == maxQuestions {
+					out = append(out, fmt.Sprintf("  … +%d more - press enter to see them all", len(plan.Questions)-maxQuestions))
+					break
+				}
+				out = append(out, fmt.Sprintf("  Q%d %s", i+1, truncateWords(q, 24)))
 			}
 			return out
 		}
 		return []string{"▮ Needs you - press ↵ enter to respond (see log below)."}
 	case store.StatePlanReview:
-		// The full plan lives in the dedicated full-screen viewer (press enter);
-		// keep the detail pane to a short teaser so it never overflows the log.
+		// The full plan (free-form markdown, possibly long) lives in the dedicated
+		// full-screen viewer (press enter); the detail pane shows a one-line teaser.
 		out := []string{"▮ Plan ready - press ↵ enter to read the full plan, then approve or give feedback"}
 		if plan, err := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket)); err == nil && plan != nil {
-			if plan.Plan != "" {
-				out = append(out, "  "+plan.Plan)
+			if teaser := planTeaser(plan.Plan); teaser != "" {
+				out = append(out, "  "+teaser)
 			}
-			out = append(out, fmt.Sprintf("  %d step(s) · Confidence: %s · Type: %s", len(plan.Steps), plan.Confidence, plan.Type))
+			meta := fmt.Sprintf("  Confidence: %s · Type: %s", plan.Confidence, plan.Type)
+			if n := len(plan.Steps); n > 0 { // legacy plans still carry a steps list
+				meta = fmt.Sprintf("  %d step(s) ·", n) + strings.TrimPrefix(meta, " ")
+			}
+			out = append(out, meta)
 		}
 		return out
 	case "failed":
@@ -1469,6 +1487,37 @@ func whyLines(s store.Session) []string {
 		return []string{line, actions}
 	}
 	return nil
+}
+
+// whyRowsFor wraps a session's whyLines to the width and caps the total rows,
+// so a verbose state note can never flood the detail pane and push the ticket
+// list or log off screen - the full content lives in the dedicated viewers.
+func whyRowsFor(s store.Session, w int) []string {
+	const maxWhyRows = 8
+	var rows []string
+	for _, ln := range whyLines(s) {
+		rows = append(rows, wrapLine(ln, w)...)
+	}
+	if len(rows) > maxWhyRows {
+		rows = append(rows[:maxWhyRows], "  …")
+	}
+	return rows
+}
+
+// planTeaser reduces a free-form markdown plan to a single display line for
+// the dashboard detail pane: the first non-empty line, stripped of markdown
+// decoration and capped in length.
+func planTeaser(plan string) string {
+	for _, ln := range strings.Split(plan, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") || strings.HasPrefix(ln, "```") {
+			continue // headings and fences make useless teasers - find real prose
+		}
+		if ln = strings.TrimSpace(strings.TrimLeft(ln, "*-> ")); ln != "" {
+			return truncateWords(ln, 24)
+		}
+	}
+	return ""
 }
 
 // failReason scrapes the most recent failure line from the log tail.

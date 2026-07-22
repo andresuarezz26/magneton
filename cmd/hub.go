@@ -8,11 +8,13 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andresuarezz26/magneton/internal/config"
 	"github.com/andresuarezz26/magneton/internal/git"
 	"github.com/andresuarezz26/magneton/internal/paths"
+	"github.com/andresuarezz26/magneton/internal/runner"
 	"github.com/andresuarezz26/magneton/internal/secrets"
 )
 
@@ -42,16 +44,25 @@ type runLaunchedMsg struct {
 	err  error
 }
 
+// ticketEditedMsg returns from the external-editor session opened with ctrl+e
+// on the branch prompt: the pasted ticket body was (maybe) rewritten at path.
+type ticketEditedMsg struct {
+	i    int    // index of the chip being edited
+	path string // temp .md file the editor was opened on
+	err  error
+}
+
 // pendingTicket is one queued ticket in the "Start new ticket(s)" input, shown
 // as a chip. kind is content|jira.
 type pendingTicket struct {
-	id         string // ticket id (typed/confirmed; also the edit buffer while prompting)
+	id         string // detected ticket id (content kind: auto-inferred, not user-edited)
 	title      string // parsed title (or the key itself, for a jira chip)
 	lines      int
 	kind       string   // "content" | "jira"
 	body       string   // raw pasted content (content kind)
 	images     []string // attached image files (content kind)
 	base       string   // chosen base branch name (bare); "" = default
+	branch     string   // final branch name (pre-filled from the pattern; also the edit buffer while prompting)
 	reviewPlan bool     // pause after the plan stage for human approval
 }
 type daemonMsg struct {
@@ -144,7 +155,7 @@ type runMethod struct{ mode, label, desc string }
 
 // runMethods lists the ways to add tickets. Jira appears only when configured.
 func (m monitorModel) runMethods() []runMethod {
-	ms := []runMethod{{"content", "Paste ticket content", "paste the text, confirm its id, attach images"}}
+	ms := []runMethod{{"content", "Write or paste the ticket content", "a markdown editor - then confirm its id + branch"}}
 	if m.jira != nil {
 		ms = append(ms, runMethod{"jira", "From Jira", "enter Jira ticket key(s)"})
 	}
@@ -169,8 +180,13 @@ func (m monitorModel) updateRunMethod(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.runMethodCursor < len(ms) {
 			m.runMode = ms[m.runMethodCursor].mode
-			m.runText, m.runTickets, m.runIDPrompt, m.runImgPrompt = "", nil, -1, -1
+			m.runText, m.runTickets, m.runIDPrompt, m.runBranchPrompt, m.runImgPrompt = "", nil, -1, -1, -1
+			m.promptCursor = 0
 			m.view = viewRunInput
+			if m.runMode == "content" {
+				m = m.withContentEditor()
+				return m, textarea.Blink
+			}
 		}
 	}
 	return m, nil
@@ -197,6 +213,9 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.runIDPrompt >= 0 {
 		return m.updateRunIDPrompt(msg)
 	}
+	if m.runBranchPrompt >= 0 {
+		return m.updateRunBranchPrompt(msg)
+	}
 	if m.runImgPrompt >= 0 {
 		return m.updateRunImgAttach(msg)
 	}
@@ -219,9 +238,12 @@ func (m monitorModel) updateRunInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m monitorModel) cancelRunInput() monitorModel {
 	m.view = viewDashboard
 	m.runMode, m.runText, m.runTickets = "", "", nil
-	m.runIDPrompt, m.runImgPrompt, m.runStackPrompt = -1, -1, -1
+	m.runIDPrompt, m.runBranchPrompt, m.runImgPrompt, m.runStackPrompt = -1, -1, -1, -1
 	m.runReviewPrompt, m.reviewCursor = -1, 0
 	m.stackBranches, m.stackDefault, m.stackFilter, m.stackCursor = nil, "", "", 0
+	m.ticketLines, m.ticketScroll = nil, 0
+	m.content, m.contentPreview = nil, false
+	m.contentBar, m.contentBtn = false, 0
 	return m
 }
 
@@ -234,26 +256,170 @@ func (m monitorModel) launchOrClose() (tea.Model, tea.Cmd) {
 	return m, m.launchRun(tickets)
 }
 
-// content method: each paste is one ticket → confirm its id → attach images.
+// content method: a real multi-line markdown EDITOR - the ticket content drives
+// the whole run, so composing it well matters. Enter inserts a new line. Esc
+// steps OUT of the editor onto an always-visible action bar (Continue / Preview
+// / Discard) below the viewport - so confirming never needs scrolling and a
+// stray Esc can't destroy the draft. ctrl+d (quick confirm) and ctrl+p
+// (preview) remain as shortcuts. Pastes land in the editor for review instead
+// of becoming a chip directly.
 func (m monitorModel) updateRunContent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Paste {
-		return m.addContentTicket(string(msg.Runes))
+	if m.content == nil { // safety net; entry points arm the editor
+		m = m.withContentEditor()
 	}
-	switch msg.Type {
-	case tea.KeyEnter:
-		return m.launchOrClose()
-	case tea.KeyEsc:
-		return m.cancelRunInput(), nil
-	case tea.KeyBackspace:
+
+	// Preview mode: read-only - scroll, flip back to editing, or confirm.
+	if m.contentPreview {
+		switch msg.Type {
+		case tea.KeyEsc:
+			return m.backToEditing()
+		case tea.KeyUp:
+			m.ticketScroll--
+			m.clampTicketScroll()
+		case tea.KeyDown:
+			m.ticketScroll++
+			m.clampTicketScroll()
+		case tea.KeyPgUp:
+			m.ticketScroll -= m.ticketViewportHeight()
+			m.clampTicketScroll()
+		case tea.KeyPgDown:
+			m.ticketScroll += m.ticketViewportHeight()
+			m.clampTicketScroll()
+		default:
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "ctrl+p":
+				return m.backToEditing()
+			case "ctrl+d":
+				return m.confirmContent()
+			}
+		}
+		return m, nil
+	}
+
+	// Action bar focused: ←→ choose, Enter activates, Esc back into the editor.
+	if m.contentBar {
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyTab:
+			return m.backToEditing()
+		case tea.KeyLeft:
+			if m.contentBtn > 0 {
+				m.contentBtn--
+			}
+		case tea.KeyRight:
+			if m.contentBtn < 2 {
+				m.contentBtn++
+			}
+		case tea.KeyEnter:
+			switch m.contentBtn {
+			case 0: // Continue to next step
+				return m.confirmContent()
+			case 1: // Keep editing
+				return m.backToEditing()
+			case 2: // Discard
+				return m.cancelRunInput(), nil
+			}
+		default:
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+		}
+		return m, nil
+	}
+
+	if msg.Paste {
+		m.content.InsertString(normalizeNewlines(string(msg.Runes)))
+		return m, nil
+	}
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		// Step out to the action bar - never silently discard the draft.
+		m.contentBar, m.contentBtn = true, 0
+		m.content.Blur()
+		return m, nil
+	case "ctrl+d":
+		return m.confirmContent()
+	case "ctrl+p":
+		return m.openContentPreview()
+	}
+	// Backspace in an empty editor removes the last queued chip.
+	if msg.Type == tea.KeyBackspace && m.content.Value() == "" {
 		if n := len(m.runTickets); n > 0 {
 			m.runTickets = m.runTickets[:n-1]
-		}
-	default:
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return m, nil
 		}
 	}
+	var cmd tea.Cmd
+	*m.content, cmd = m.content.Update(msg)
+	return m, cmd
+}
+
+// backToEditing returns focus to the editor from the action bar or preview.
+func (m monitorModel) backToEditing() (tea.Model, tea.Cmd) {
+	m.contentPreview, m.contentBar = false, false
+	m.content.Focus()
+	return m, textarea.Blink
+}
+
+// openContentPreview renders the draft to a scrollable glamour preview (no-op
+// on an empty draft).
+func (m monitorModel) openContentPreview() (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(m.content.Value()) == "" {
+		return m, nil
+	}
+	m.ticketLines = renderMarkdownLines(m.content.Value(), m.paneWidth())
+	m.ticketScroll = 0
+	m.contentPreview = true
 	return m, nil
+}
+
+// confirmContent turns the editor's content into a pending ticket, entering the
+// id/branch confirm chain; with an empty editor it launches the queued chips.
+func (m monitorModel) confirmContent() (tea.Model, tea.Cmd) {
+	body := m.content.Value()
+	if strings.TrimSpace(body) == "" {
+		return m.launchOrClose()
+	}
+	m.content.Reset()
+	m.content.Focus() // clean editing state for when the chip chain returns here
+	m.contentPreview, m.contentBar, m.contentBtn = false, false, 0
+	return m.addContentTicket(body)
+}
+
+// withContentEditor arms content mode's multi-line markdown editor
+// (bubbles/textarea: enter for new lines, full 2D cursor movement, wrapping).
+func (m monitorModel) withContentEditor() monitorModel {
+	ta := textarea.New()
+	ta.Placeholder = "Type or paste the ticket here - markdown welcome…"
+	ta.CharLimit = 0
+	ta.MaxHeight = 0
+	ta.ShowLineNumbers = false
+	ta.Focus()
+	m.content = &ta
+	m.contentPreview = false
+	m.sizeContentEditor()
+	return m
+}
+
+// sizeContentEditor fits the editor to the terminal, leaving room for the
+// screen chrome and any queued chips.
+func (m monitorModel) sizeContentEditor() {
+	if m.content == nil {
+		return
+	}
+	w := m.width - 6
+	if w < 40 {
+		w = 40
+	}
+	h := m.height - 12 - len(m.runTickets) // chrome + the esc hint above and action bar below
+	if h < 5 {
+		h = 5
+	}
+	m.content.SetWidth(w)
+	m.content.SetHeight(h)
 }
 
 func (m monitorModel) addContentTicket(blob string) (tea.Model, tea.Cmd) {
@@ -269,8 +435,28 @@ func (m monitorModel) addContentTicket(blob string) (tea.Model, tea.Cmd) {
 	m.runTickets = append(m.runTickets, pendingTicket{
 		id: guess, title: title, lines: lineCount(blob), kind: "content", body: blob,
 	})
+	// Step 1: confirm the id. The branch pre-fill is computed on its Enter, from
+	// the CONFIRMED id (see updateRunIDPrompt).
 	m.runIDPrompt = len(m.runTickets) - 1
+	m.promptCursor = len([]rune(guess))
+	m.ticketLines = renderMarkdownLines(blob, m.paneWidth())
+	m.ticketScroll = 0
 	return m, nil
+}
+
+// inferBranch pre-fills the creation-time branch field: the repo's branch
+// pattern expanded with the detected ticket id and title. The user edits the
+// result, and whatever they confirm is passed through verbatim as the final
+// branch name (via `run --branch`).
+func inferBranch(id, title string) string {
+	pattern := "{ticket}-{slug}"
+	if cfg, err := config.Load(); err == nil && len(cfg.Repos) > 0 && cfg.Repos[0].Branch != "" {
+		pattern = cfg.Repos[0].Branch
+	}
+	if id == "" {
+		id = "PASTED" // writePastedTicket's fallback id
+	}
+	return runner.ResolveBranch(pattern, id, stripIDPrefix(title, id))
 }
 
 // jira method: whitespace-separated Jira keys become chips directly.
@@ -605,20 +791,27 @@ func chipLabel(t pendingTicket) string {
 		}
 		return lbl
 	}
-	id := t.id
-	if id == "" {
-		id = "?"
+	// Content chips lead with the confirmed branch name (the user-facing identity
+	// since the branch prompt replaced the id prompt); fall back to the id.
+	head := t.branch
+	if head == "" {
+		head = t.id
+	}
+	if head == "" {
+		head = "?"
 	}
 	suffix := imgSuffix(len(t.images))
 	if t.base != "" {
 		suffix += " ⤷ " + t.base
 	}
 	return fmt.Sprintf("[%s · %s · %d line%s%s]",
-		id, truncate(stripIDPrefix(t.title, t.id), 40), t.lines, plural(t.lines), suffix)
+		head, truncate(stripIDPrefix(t.title, t.id), 40), t.lines, plural(t.lines), suffix)
 }
 
-// updateRunIDPrompt: confirm/fix the pre-filled id for a pasted content ticket.
-// On accept it advances to the image-attach step. The chip's id doubles as buffer.
+// updateRunIDPrompt: step 1 - confirm/fix the detected ticket id for a pasted
+// content ticket (it names the dashboard row, worktree, and logs). On accept it
+// computes the branch pre-fill from the CONFIRMED id and advances to the branch
+// prompt. The chip's id doubles as the edit buffer.
 func (m monitorModel) updateRunIDPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	i := m.runIDPrompt
 	if i < 0 || i >= len(m.runTickets) {
@@ -632,24 +825,256 @@ func (m monitorModel) updateRunIDPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if id := normalizeTicket(m.runTickets[i].id); id != "" {
 			m.runTickets[i].id = id
+			m.runTickets[i].branch = inferBranch(id, m.runTickets[i].title)
 			m.runIDPrompt = -1
-			m.runImgPrompt = i // next: attach images
+			m.runBranchPrompt = i // step 2: confirm the branch name
+			m.promptCursor = len([]rune(m.runTickets[i].branch))
 		}
 	case tea.KeyEsc:
 		m.runTickets = append(m.runTickets[:i], m.runTickets[i+1:]...) // drop this chip
 		m.runIDPrompt = -1
-	case tea.KeyBackspace:
-		if r := []rune(m.runTickets[i].id); len(r) > 0 {
-			m.runTickets[i].id = string(r[:len(r)-1])
-		}
-	case tea.KeyRunes:
-		m.runTickets[i].id += string(msg.Runes)
+		m.ticketLines, m.ticketScroll = nil, 0
+	case tea.KeyUp:
+		m.ticketScroll--
+		m.clampTicketScroll()
+	case tea.KeyDown:
+		m.ticketScroll++
+		m.clampTicketScroll()
+	case tea.KeyPgUp:
+		m.ticketScroll -= m.ticketViewportHeight()
+		m.clampTicketScroll()
+	case tea.KeyPgDown:
+		m.ticketScroll += m.ticketViewportHeight()
+		m.clampTicketScroll()
 	default:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+e":
+			return m.openTicketEditor(i)
+		}
+		// Caret editing (←→/Home/End/type/backspace/delete) via the shared
+		// form-field editor.
+		fld := formField{value: m.runTickets[i].id, cursor: m.promptCursor}
+		if fld.editKey(msg) {
+			m.runTickets[i].id, m.promptCursor = fld.value, fld.cursor
 		}
 	}
 	return m, nil
+}
+
+// updateRunBranchPrompt: step 2 - confirm/edit the pre-filled branch name for a
+// pasted content ticket. On accept it advances to the image-attach step. The
+// chip's branch doubles as the edit buffer; the confirmed value is the FINAL
+// branch name, passed verbatim to `run --branch`.
+func (m monitorModel) updateRunBranchPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	i := m.runBranchPrompt
+	if i < 0 || i >= len(m.runTickets) {
+		m.runBranchPrompt = -1
+		return m, nil
+	}
+	if msg.Paste {
+		return m, nil // ignore pastes while editing the branch
+	}
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Collapse whitespace to "-" (git refuses spaces in branch names).
+		if br := strings.Join(strings.Fields(m.runTickets[i].branch), "-"); br != "" {
+			m.runTickets[i].branch = br
+			m.runBranchPrompt = -1
+			m.runImgPrompt = i // next: attach images
+			m.ticketLines, m.ticketScroll = nil, 0
+		}
+	case tea.KeyEsc:
+		m.runTickets = append(m.runTickets[:i], m.runTickets[i+1:]...) // drop this chip
+		m.runBranchPrompt = -1
+		m.ticketLines, m.ticketScroll = nil, 0
+	case tea.KeyUp:
+		m.ticketScroll--
+		m.clampTicketScroll()
+	case tea.KeyDown:
+		m.ticketScroll++
+		m.clampTicketScroll()
+	case tea.KeyPgUp:
+		m.ticketScroll -= m.ticketViewportHeight()
+		m.clampTicketScroll()
+	case tea.KeyPgDown:
+		m.ticketScroll += m.ticketViewportHeight()
+		m.clampTicketScroll()
+	default:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "ctrl+e":
+			return m.openTicketEditor(i)
+		}
+		// Caret editing (←→/Home/End/type/backspace/delete) via the shared
+		// form-field editor.
+		fld := formField{value: m.runTickets[i].branch, cursor: m.promptCursor}
+		if fld.editKey(msg) {
+			m.runTickets[i].branch, m.promptCursor = fld.value, fld.cursor
+		}
+	}
+	return m, nil
+}
+
+// openTicketEditor suspends the TUI and opens the pasted ticket body in the
+// user's $VISUAL/$EDITOR (vim fallback) via a temp .md file, so the full
+// content can be reviewed and edited before the run launches.
+func (m monitorModel) openTicketEditor(i int) (tea.Model, tea.Cmd) {
+	if i < 0 || i >= len(m.runTickets) {
+		return m, nil
+	}
+	f, err := os.CreateTemp("", "magneton-ticket-*.md")
+	if err != nil {
+		m.notice = "edit ticket: " + err.Error()
+		return m, nil
+	}
+	path := f.Name()
+	if _, err := f.WriteString(m.runTickets[i].body); err != nil {
+		f.Close()
+		os.Remove(path)
+		m.notice = "edit ticket: " + err.Error()
+		return m, nil
+	}
+	f.Close()
+	parts := strings.Fields(editorCmd())
+	c := exec.Command(parts[0], append(parts[1:], path)...)
+	return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return ticketEditedMsg{i: i, path: path, err: err}
+	})
+}
+
+// editorCmd picks the user's editor: $VISUAL, then $EDITOR, then vim. The value
+// may carry flags (e.g. "code -w"), so callers split it into fields.
+func editorCmd() string {
+	if v := os.Getenv("VISUAL"); v != "" {
+		return v
+	}
+	if v := os.Getenv("EDITOR"); v != "" {
+		return v
+	}
+	return "vim"
+}
+
+// applyTicketEdit folds the editor result back into the chip: body, title, line
+// count, and detected id are re-derived. The branch field is re-inferred only if
+// the user hadn't already customized it away from the previous inferred value.
+func (m monitorModel) applyTicketEdit(msg ticketEditedMsg) (tea.Model, tea.Cmd) {
+	defer os.Remove(msg.path)
+	i := msg.i
+	if msg.err != nil {
+		m.notice = "edit ticket: " + msg.err.Error()
+		return m, nil
+	}
+	if i < 0 || i >= len(m.runTickets) {
+		return m, nil
+	}
+	raw, err := os.ReadFile(msg.path)
+	if err != nil {
+		m.notice = "edit ticket: " + err.Error()
+		return m, nil
+	}
+	body := normalizeNewlines(string(raw))
+	if strings.TrimSpace(body) == "" {
+		m.notice = "edit discarded - the ticket can't be empty"
+		return m, nil
+	}
+	t := &m.runTickets[i]
+	prevInferred := inferBranch(t.id, t.title)
+	title, _, err := parseTicketContent(body)
+	if err != nil || title == "" {
+		title = "(untitled)"
+	}
+	// Re-detect the id, but keep the current one (possibly hand-typed in the id
+	// step) when the new content has none.
+	if id, ok := detectTicketID(body); ok {
+		t.id = id
+	}
+	t.body, t.title, t.lines = body, title, lineCount(body)
+	if t.branch != "" && t.branch == prevInferred {
+		t.branch = inferBranch(t.id, title)
+	}
+	if m.runIDPrompt == i || m.runBranchPrompt == i {
+		m.ticketLines = renderMarkdownLines(body, m.paneWidth())
+		m.ticketScroll = 0
+		// The active field's value may have been re-derived - park the caret at
+		// its end.
+		if m.runIDPrompt == i {
+			m.promptCursor = len([]rune(t.id))
+		} else {
+			m.promptCursor = len([]rune(t.branch))
+		}
+	}
+	return m, nil
+}
+
+// renderTicketPrompt is the shared layout for the id and branch confirmation
+// steps: the full ticket content, markdown-rendered (same glamour pipeline as
+// the plan viewer) in a scrollable window, with the step's header and input
+// field directly below it.
+func (m monitorModel) renderTicketPrompt(body, header, field string, w int) string {
+	var b strings.Builder
+	lines := m.ticketLines
+	if lines == nil && strings.TrimSpace(body) != "" {
+		lines = renderMarkdownLines(body, m.paneWidth())
+	}
+	viewH := m.ticketViewportHeight()
+	start, end := scrollWindow(len(lines), m.ticketScroll, viewH)
+	for _, ln := range lines[start:end] {
+		b.WriteString(ln + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("  "+header) + "\n")
+	b.WriteString("  " + field + "\n")
+	hint := "←→ move · ctrl+e edit ticket · enter next · esc drop this ticket"
+	if len(lines) > viewH {
+		hint = fmt.Sprintf("%d–%d of %d · ↑↓ scroll · %s", start+1, end, len(lines), hint)
+	}
+	b.WriteString("\n  " + dimStyle.Render(hint))
+	return b.String()
+}
+
+// scrollWindow returns the visible [start, end) bounds of an n-line buffer
+// scrolled to offset with viewH visible rows.
+func scrollWindow(n, offset, viewH int) (start, end int) {
+	start = offset
+	if start > n-viewH {
+		start = n - viewH
+	}
+	if start < 0 {
+		start = 0
+	}
+	end = start + viewH
+	if end > n {
+		end = n
+	}
+	return start, end
+}
+
+// ticketViewportHeight is how many rows of the pasted ticket are visible in the
+// id/branch prompts: the screen minus their chrome (app header, blank, title,
+// input line, and the blank + hint footer).
+func (m monitorModel) ticketViewportHeight() int {
+	h := m.height - 7
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// clampTicketScroll keeps the branch prompt's scroll offset within [0, max].
+func (m *monitorModel) clampTicketScroll() {
+	max := len(m.ticketLines) - m.ticketViewportHeight()
+	if max < 0 {
+		max = 0
+	}
+	if m.ticketScroll > max {
+		m.ticketScroll = max
+	}
+	if m.ticketScroll < 0 {
+		m.ticketScroll = 0
+	}
 }
 
 func (m monitorModel) renderRunInput(w int) string {
@@ -663,7 +1088,7 @@ func (m monitorModel) renderRunInput(w int) string {
 	chips := func() {
 		for i, t := range m.runTickets {
 			label := chipLabel(t)
-			if i == m.runIDPrompt || i == m.runImgPrompt {
+			if i == m.runBranchPrompt || i == m.runImgPrompt {
 				label = selStyle.Render(" " + label + " ")
 			}
 			b.WriteString("  " + label + "\n")
@@ -674,13 +1099,16 @@ func (m monitorModel) renderRunInput(w int) string {
 	}
 
 	if m.runIDPrompt >= 0 && m.runIDPrompt < len(m.runTickets) {
-		b.WriteString(headerStyle.Render("  Confirm the ticket id") + "\n")
-		b.WriteString(dimStyle.Render("  fix it if it grabbed the epic, not the ticket") + "\n\n")
-		chips()
-		b.WriteString(renderBodyPreview(m.runTickets[m.runIDPrompt].body, w))
-		b.WriteString("  ticket id › " + m.runTickets[m.runIDPrompt].id + "▌\n")
-		b.WriteString("\n  " + dimStyle.Render("enter next · esc drop this ticket"))
-		return b.String()
+		t := m.runTickets[m.runIDPrompt]
+		return m.renderTicketPrompt(t.body,
+			"Confirm the ticket id",
+			"ticket id › "+formField{value: t.id, cursor: m.promptCursor}.caretView(), w)
+	}
+	if m.runBranchPrompt >= 0 && m.runBranchPrompt < len(m.runTickets) {
+		t := m.runTickets[m.runBranchPrompt]
+		return m.renderTicketPrompt(t.body,
+			"Update or Approve the branch name",
+			"branch › "+formField{value: t.branch, cursor: m.promptCursor}.caretView(), w)
 	}
 	if m.runImgPrompt >= 0 && m.runImgPrompt < len(m.runTickets) {
 		n := len(m.runTickets[m.runImgPrompt].images)
@@ -701,10 +1129,50 @@ func (m monitorModel) renderRunInput(w int) string {
 		b.WriteString("  › " + m.runText + "▌\n")
 		b.WriteString("\n  " + dimStyle.Render("space add · ctrl+s stack · enter launch · esc cancel"))
 	default: // content
-		b.WriteString(headerStyle.Render("  Paste ticket content") + "\n")
-		b.WriteString(dimStyle.Render("  paste a ticket; you'll confirm its id and attach images") + "\n\n")
+		b.WriteString(headerStyle.Render("  Write or paste the ticket content") + "\n\n")
 		chips()
-		b.WriteString("  " + dimStyle.Render("paste a ticket · enter launch · esc cancel"))
+		switch {
+		case m.contentPreview:
+			viewH := m.ticketViewportHeight()
+			start, end := scrollWindow(len(m.ticketLines), m.ticketScroll, viewH)
+			for _, ln := range m.ticketLines[start:end] {
+				b.WriteString(ln + "\n")
+			}
+			hint := "ctrl+p edit · ctrl+d confirm ticket · esc back to editing"
+			if len(m.ticketLines) > viewH {
+				hint = fmt.Sprintf("%d–%d of %d · ↑↓ scroll · %s", start+1, end, len(m.ticketLines), hint)
+			}
+			b.WriteString("\n  " + dimStyle.Render(hint))
+		case m.content != nil:
+			// Reserved row so the editor doesn't jump when focus moves to the bar.
+			escHint := ""
+			if !m.contentBar {
+				escHint = headerStyle.Render("  Press ESC to leave the edit mode")
+			}
+			b.WriteString(escHint + "\n")
+			b.WriteString(m.content.View() + "\n\n")
+			// Action bar: always visible below the editor viewport (the editor
+			// scrolls internally, so long content never pushes it off-screen).
+			buttons := []string{"Continue to next step", "Keep editing", "Discard"}
+			if strings.TrimSpace(m.content.Value()) == "" && len(m.runTickets) > 0 {
+				buttons[0] = "Launch" // empty editor + queued chips: Continue launches them
+			}
+			var bar strings.Builder
+			bar.WriteString("  ")
+			for i, it := range buttons {
+				if m.contentBar && i == m.contentBtn {
+					bar.WriteString(planBtnSel.Render("▸ "+it) + "  ")
+				} else {
+					bar.WriteString(planBtn.Render(it) + "  ")
+				}
+			}
+			b.WriteString(bar.String() + "\n")
+			hint := "enter new line · esc: actions · ctrl+p preview · ctrl+d quick-confirm"
+			if m.contentBar {
+				hint = "←→ choose · enter select · esc/tab back to editing"
+			}
+			b.WriteString("\n  " + dimStyle.Render(hint))
+		}
 	}
 	return b.String()
 }
@@ -715,11 +1183,11 @@ func (m monitorModel) renderRunInput(w int) string {
 func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 	self := m.selfPath
 	return func() tea.Msg {
-		// A per-ticket base OR a per-ticket plan-review flag forces the per-ticket
+		// A per-ticket base, plan-review flag, or branch name forces the per-ticket
 		// subprocess path (batching one `run` call can't carry per-chip flags).
 		anyStacked := false
 		for _, t := range tickets {
-			if t.base != "" || t.reviewPlan {
+			if t.base != "" || t.reviewPlan || t.branch != "" {
 				anyStacked = true
 				break
 			}
@@ -744,6 +1212,9 @@ func (m monitorModel) launchRun(tickets []pendingTicket) tea.Cmd {
 				cmdArgs := []string{"run", arg}
 				if t.base != "" {
 					cmdArgs = append(cmdArgs, "--base", t.base)
+				}
+				if t.branch != "" {
+					cmdArgs = append(cmdArgs, "--branch", t.branch)
 				}
 				if t.reviewPlan {
 					cmdArgs = append(cmdArgs, "--review-plan")

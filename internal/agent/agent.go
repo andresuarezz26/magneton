@@ -42,13 +42,13 @@ type Report struct {
 // verification itself. NeedsEmulator is kept so the orchestrator can coordinate
 // the shared emulator across concurrent tickets before the verify stage runs.
 type Plan struct {
-	Plan          string   `json:"plan"`           // one-line approach summary
-	Steps         []string `json:"steps"`          // ordered implementation steps
+	Plan          string   `json:"plan"`           // the full plan, free-form markdown - Claude structures it however it wants
+	Steps         []string `json:"steps"`          // legacy: no longer requested; still injected/rendered if a plan carries them
 	Questions     []string `json:"questions"`      // blocking ambiguities; empty = proceed
 	Confidence    string   `json:"confidence"`     // "high" | "medium" | "low"
 	Type          string   `json:"type"`           // "bug" | "feature" | "chore"
 	NeedsEmulator bool     `json:"needs_emulator"` // true if task requires instrumentation tests
-	Diagram       string   `json:"diagram"`        // optional ASCII/mermaid diagram shown in the plan viewer
+	Diagram       string   `json:"diagram"`        // legacy: no longer requested; still rendered if a plan carries one
 }
 
 // Review is the .agent/review.json the self-review stage must write.
@@ -57,9 +57,45 @@ type Review struct {
 	Issues  []string `json:"issues"`  // actionable fix items when verdict=="fix"
 }
 
+// PlanMarkdown renders a plan as a markdown document (shared by the TUI's plan
+// viewer and the durable ~/.magneton/plans/<ticket>.md archive).
+func PlanMarkdown(title string, plan *Plan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	if plan.Confidence != "" || plan.Type != "" {
+		fmt.Fprintf(&b, "**Confidence:** %s  ·  **Type:** %s\n\n", plan.Confidence, plan.Type)
+	}
+	// The plan body is free-form markdown with its own structure - include it
+	// verbatim rather than forcing it under a heading.
+	if strings.TrimSpace(plan.Plan) != "" {
+		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(plan.Plan))
+	}
+	if strings.TrimSpace(plan.Diagram) != "" {
+		fmt.Fprintf(&b, "## Diagram\n\n%s\n\n", plan.Diagram)
+	}
+	if len(plan.Steps) > 0 {
+		b.WriteString("## Steps\n\n")
+		for i, step := range plan.Steps {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+		}
+		b.WriteString("\n")
+	}
+	if len(plan.Questions) > 0 {
+		b.WriteString("## Open questions\n\n")
+		for _, q := range plan.Questions {
+			fmt.Fprintf(&b, "- %s\n", q)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // PlanTools is the read-only allowlist for the plan stage.
-// Write is included only to create .agent/plan.json; source files must not be edited.
-const PlanTools = "Write Read Glob Grep " +
+// Write is included only to create .agent/plan.json; source files must not be
+// edited. Task (subagent exploration) and TodoWrite (Claude Code's own plan
+// tracking) are allowed so the model can plan with its native tooling - both
+// are read-only with respect to the source tree.
+const PlanTools = "Write Read Glob Grep Task TodoWrite " +
 	"Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) " +
 	"Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(git status:*) " +
 	"Bash(git diff:*) Bash(git log:*) Bash(git show:*)"
@@ -292,48 +328,32 @@ func BuildPlanPrompt(ticketKey, summary, description string) string {
 	if desc == "" {
 		desc = "(no description provided)"
 	}
-	return fmt.Sprintf(`You are a senior Android engineer planning the implementation of a Jira ticket.
-Your job is to READ and UNDERSTAND the codebase, then produce a concrete plan.
-Do NOT edit any source files - this is a planning step only.
+	return fmt.Sprintf(`Plan the implementation of a ticket in this Android codebase.
+Understand the code and produce your implementation plan however you see fit,
+using whatever tools and approach work best for you. Do NOT edit any source
+files - this is a planning step only.
 
 TICKET %s: %s
 
 %s
 
-Instructions:
-1. Explore the codebase (git log, find, grep, cat) to understand the affected code.
-2. Identify the minimal, focused change needed to resolve this ticket.
-3. List any genuine ambiguities that would block safe implementation (questions[]).
-   Only list a question if you truly cannot make a safe assumption - prefer a reasonable default.
-4. Classify the ticket type: "bug", "feature", or "chore".
-5. Rate your confidence: "high" (clear path), "medium" (some uncertainty), "low" (significant unknowns).
-6. Decide whether this task requires a connected Android device or emulator.
-   Set needs_emulator=true if ANY of these apply:
-   - The ticket involves UI tests, Espresso, or Compose instrumentation tests.
-   - The task creates or modifies files under androidTest/ directory.
-   - The ticket description explicitly mentions instrumentation or connected tests.
-   Set needs_emulator=false for: domain layer, use cases, repositories, ViewModels,
-   unit tests under test/ (not androidTest/), or pure Kotlin/Java logic.
-7. Optionally add a "diagram" that illustrates the architecture or data/navigation
-   flow of your plan. It renders as markdown in the reviewer's terminal, so use a
-   fenced code block: a plain-ASCII boxes-and-arrows diagram (most readable in a
-   terminal) or a mermaid block. ALWAYS include a diagram when the ticket or the
-   human's "Plan feedback" asks for one; otherwise include it only when it genuinely
-   aids understanding. Leave it as an empty string when not useful.
-
-Your ONLY write action is to create .agent/plan.json (create the .agent directory if needed):
+When your plan is ready, write it to .agent/plan.json (create the .agent directory if needed):
 {
-  "plan": "<one sentence: what will change and why>",
-  "steps": ["<step 1>", "<step 2>", ...],
+  "plan": "<your full implementation plan, as markdown - any length and structure you consider right>",
   "questions": ["<question if truly blocking>"],
   "confidence": "high" | "medium" | "low",
   "type": "bug" | "feature" | "chore",
-  "needs_emulator": true | false,
-  "diagram": "<optional fenced ASCII/mermaid diagram, or empty string>"
+  "needs_emulator": true | false
 }
-Use an empty array for questions if you can proceed without human input.
-If the human left "Plan feedback" in the ticket text, treat it as the priority:
-revise the plan to address it directly.`,
+The fields besides "plan" drive the orchestrator:
+- questions: only genuine ambiguities that block safe implementation - prefer a
+  reasonable assumption over a question. Empty array = proceed without human input.
+  If the human left "Plan feedback" in the ticket text, treat it as the priority:
+  revise the plan to address it directly.
+- needs_emulator coordinates a shared Android emulator across tickets. Set it true
+  if the work involves UI/Espresso/Compose instrumentation tests, files under
+  androidTest/, or the ticket mentions connected tests; false for domain logic,
+  ViewModels, repositories, unit tests under test/, or pure Kotlin/Java changes.`,
 		ticketKey, summary, desc)
 }
 
@@ -343,20 +363,23 @@ func BuildImplPrompt(ticketKey, summary, description string, plan *Plan) string 
 	if desc == "" {
 		desc = "(no description provided)"
 	}
-	steps := strings.Join(plan.Steps, "\n")
+	// The plan is free-form markdown. Legacy plans (pre-2.0 archives) may carry a
+	// separate steps list - append it so nothing is lost on re-runs.
+	planBlock := plan.Plan
+	if len(plan.Steps) > 0 {
+		planBlock += "\n\nIMPLEMENTATION STEPS:\n" + strings.Join(plan.Steps, "\n")
+	}
 	return fmt.Sprintf(`You are an autonomous Android engineer implementing a pre-approved plan inside an isolated git worktree (your current working directory).
 
 TICKET %s: %s
 
 %s
 
-APPROVED PLAN: %s
-
-IMPLEMENTATION STEPS:
+APPROVED PLAN:
 %s
 
 Rules:
-- Follow the approved plan and steps above. Make the focused, minimal change described.
+- Follow the approved plan above. Make the focused, minimal change described.
 - This is an Android/Gradle project. A later verification step will build the project and run its tests - write code that compiles and passes.
 - Do NOT git push and do NOT open a pull request - the orchestrator handles commit, push, and PR.
 - PR description: check whether this repo has a pull request template (.github/PULL_REQUEST_TEMPLATE.md, .github/pull_request_template.md, or docs/PULL_REQUEST_TEMPLATE.md). If one exists, fill it out for THIS change: EVERY heading, section, and checklist item MUST appear in prBody, in the same order. Never drop a section - fill each one with real content about THIS change. Keep every checklist item exactly as written: tick the boxes that apply, leave the rest unticked. Do not add sections, filler text, or commentary not in the template. Put the finished markdown in "prBody". If there is NO template, set "prBody" to "".
@@ -370,7 +393,7 @@ Rules:
   "prBody": "<repo PR template filled in, or \"\" if the repo has none>"
 }
 Use "needs_human" if you hit an unexpected blocker you cannot resolve safely.`,
-		ticketKey, summary, desc, plan.Plan, steps)
+		ticketKey, summary, desc, planBlock)
 }
 
 // BuildReviewPrompt is the instruction for the self-review stage.

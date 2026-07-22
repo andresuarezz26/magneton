@@ -20,14 +20,15 @@ import (
 )
 
 var (
-	runRepo   string
-	runDryRun bool
-	runLocal  bool
-	runTitle  string
-	runDesc   string
+	runRepo       string
+	runDryRun     bool
+	runLocal      bool
+	runTitle      string
+	runDesc       string
 	runResume     bool
 	runShip       bool
 	runBase       string
+	runBranch     string
 	runReviewPlan bool
 	runFromPlan   bool
 )
@@ -47,6 +48,7 @@ func init() {
 	c.Flags().BoolVar(&runResume, "resume", false, "verify & ship: continue from the existing worktree (keep manual fixes), re-run the gate, then PR")
 	c.Flags().BoolVar(&runShip, "ship", false, "ship without verifying: trust your manual fix, commit + push + PR directly (use when verification itself is unreliable in the worktree)")
 	c.Flags().StringVar(&runBase, "base", "", "base branch (or ticket id) to stack on; overrides config default")
+	c.Flags().StringVar(&runBranch, "branch", "", "exact branch name for the PR; overrides the config branch pattern")
 	c.Flags().BoolVar(&runReviewPlan, "review-plan", false, "pause after planning so you can review the plan before implementation")
 	c.Flags().BoolVar(&runFromPlan, "from-plan", false, "skip planning: implement from the existing plan.json in the worktree")
 	rootCmd.AddCommand(c)
@@ -119,6 +121,9 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 	if multi && (runTitle != "" || runDesc != "") {
 		return nil, fmt.Errorf("--title/--desc cannot be combined with multiple tickets; put the text in the .md files")
 	}
+	if multi && runBranch != "" {
+		return nil, fmt.Errorf("--branch cannot be combined with multiple tickets; the branch name is per-ticket")
+	}
 
 	specs := make([]ticketSpec, 0, len(args))
 	for _, arg := range args {
@@ -129,6 +134,7 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 			}
 			specs = append(specs, ticketSpec{
 				ticket: normalizeTicket(arg), summary: runTitle, desc: runDesc, local: true,
+				branch: runBranch,
 			})
 			continue
 		}
@@ -139,11 +145,12 @@ func resolveSpecs(args []string) ([]ticketSpec, error) {
 				return nil, err
 			}
 			sp.stackBase = runBase
+			sp.branch = runBranch
 			specs = append(specs, sp)
 			continue
 		}
 		// (3) Jira ticket key.
-		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg), stackBase: runBase})
+		specs = append(specs, ticketSpec{ticket: normalizeTicket(arg), stackBase: runBase, branch: runBranch})
 	}
 
 	return dedupeSpecs(specs), nil
@@ -286,7 +293,7 @@ func runOne(sp ticketSpec, cfg *config.Config, repo *config.Repo, st *store.Stor
 	out := runner.Run(runner.Task{
 		Ticket: sp.ticket, Summary: summary, Description: desc,
 		Repo: repo, Cfg: cfg, DryRun: runDryRun, Resume: runResume, Ship: runShip,
-		Store: st, Images: sp.images, Base: resolvedBase,
+		Store: st, Images: sp.images, Base: resolvedBase, Branch: sp.branch,
 		ReviewPlan: reviewPlan, FromPlan: runFromPlan,
 	}, hooks)
 	// Record the terminal outcome in the ticket log so the reason is visible in

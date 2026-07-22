@@ -21,6 +21,7 @@ type ticketSpec struct {
 	sourcePath string   // absolute path to the .md file; empty for Jira tickets
 	images     []string // image files attached to the ticket (pasted-content flow)
 	stackBase  string   // bare base branch name for stacked diffs; "" = default
+	branch     string   // exact branch name (--branch); "" = derive from the repo pattern
 }
 
 var (

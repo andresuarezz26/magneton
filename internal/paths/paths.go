@@ -22,6 +22,7 @@ func Worktrees() string { return filepath.Join(Root(), "worktrees") }
 func Logs() string      { return filepath.Join(Root(), "logs") }
 func Templates() string { return filepath.Join(Root(), "templates") }
 func Reports() string   { return filepath.Join(Root(), "reports") }
+func Plans() string     { return filepath.Join(Root(), "plans") }
 func Pasted() string    { return filepath.Join(Root(), "pasted") }
 func DaemonLog() string { return filepath.Join(Root(), "daemon.log") }
 func PidFile() string   { return filepath.Join(Root(), "daemon.pid") }
@@ -38,6 +39,12 @@ func LogFor(ticket string) string { return filepath.Join(Logs(), ticket+".log") 
 // ReportFor is where magneton archives a ticket's completion report, kept in
 // magneton's own home so it never lands in the target repo / PR.
 func ReportFor(ticket string) string { return filepath.Join(Reports(), ticket+".json") }
+
+// PlanMDFor / PlanJSONFor are the durable copies of a ticket's plan, archived in
+// magneton's own home right after planning - the worktree's .agent/ scratch is
+// git-excluded and disposable, so these never land in the target repo / PR.
+func PlanMDFor(ticket string) string   { return filepath.Join(Plans(), ticket+".md") }
+func PlanJSONFor(ticket string) string { return filepath.Join(Plans(), ticket+".json") }
 
 // WriteLocalProperties writes sdk.dir to <dir>/local.properties so Gradle can
 // locate the Android SDK in fresh worktrees where the file is git-ignored.
@@ -75,7 +82,7 @@ func EnsureDirs() error {
 		home, _ := os.UserHomeDir()
 		migrateAgentDir(filepath.Join(home, ".agent"), root)
 	}
-	for _, d := range []string{root, Worktrees(), Logs(), Templates(), Reports(), Pasted()} {
+	for _, d := range []string{root, Worktrees(), Logs(), Templates(), Reports(), Plans(), Pasted()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

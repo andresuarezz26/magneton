@@ -38,63 +38,108 @@ type formModel struct {
 	submit func(fields []formField) tea.Msg
 }
 
-// clampCursor keeps the focused field's caret within [0, len(value)] and returns
-// the field's runes and the clamped position.
-func (f *formModel) caret() (*formField, []rune, int) {
-	fld := &f.fields[f.focus]
-	r := []rune(fld.value)
-	if fld.cursor < 0 {
-		fld.cursor = 0
+// ---- single-line caret editing (shared by the form and the id/branch prompts) ----
+
+// clamp keeps the caret within [0, len(value)] and returns the value's runes
+// and the clamped position.
+func (f *formField) clamp() ([]rune, int) {
+	r := []rune(f.value)
+	if f.cursor < 0 {
+		f.cursor = 0
 	}
-	if fld.cursor > len(r) {
-		fld.cursor = len(r)
+	if f.cursor > len(r) {
+		f.cursor = len(r)
 	}
-	return fld, r, fld.cursor
+	return r, f.cursor
 }
 
-// typeRunes inserts s at the caret and advances it.
-func (f *formModel) typeRunes(s string) {
-	fld, r, pos := f.caret()
+// insert inserts s at the caret and advances it.
+func (f *formField) insert(s string) {
+	r, pos := f.clamp()
 	ins := []rune(s)
 	out := make([]rune, 0, len(r)+len(ins))
 	out = append(out, r[:pos]...)
 	out = append(out, ins...)
 	out = append(out, r[pos:]...)
-	fld.value = string(out)
-	fld.cursor = pos + len(ins)
+	f.value = string(out)
+	f.cursor = pos + len(ins)
 }
 
 // backspace deletes the rune before the caret.
-func (f *formModel) backspace() {
-	fld, r, pos := f.caret()
+func (f *formField) backspace() {
+	r, pos := f.clamp()
 	if pos > 0 {
-		fld.value = string(r[:pos-1]) + string(r[pos:])
-		fld.cursor = pos - 1
+		f.value = string(r[:pos-1]) + string(r[pos:])
+		f.cursor = pos - 1
 	}
 }
 
 // deleteForward deletes the rune at the caret (the Delete key).
-func (f *formModel) deleteForward() {
-	fld, r, pos := f.caret()
+func (f *formField) deleteForward() {
+	r, pos := f.clamp()
 	if pos < len(r) {
-		fld.value = string(r[:pos]) + string(r[pos+1:])
+		f.value = string(r[:pos]) + string(r[pos+1:])
 	}
 }
 
-func (f *formModel) left() {
-	if _, _, pos := f.caret(); pos > 0 {
-		f.fields[f.focus].cursor = pos - 1
+func (f *formField) left() {
+	if _, pos := f.clamp(); pos > 0 {
+		f.cursor = pos - 1
 	}
 }
 
-func (f *formModel) right() {
-	if _, r, pos := f.caret(); pos < len(r) {
-		f.fields[f.focus].cursor = pos + 1
+func (f *formField) right() {
+	if r, pos := f.clamp(); pos < len(r) {
+		f.cursor = pos + 1
 	}
 }
 
-func (f *formModel) home() { f.fields[f.focus].cursor = 0 }
-func (f *formModel) end()  { f.fields[f.focus].cursor = len([]rune(f.fields[f.focus].value)) }
+func (f *formField) home() { f.cursor = 0 }
+func (f *formField) end()  { f.cursor = len([]rune(f.value)) }
+
+// caretView returns the value with the caret glyph drawn at the cursor.
+func (f formField) caretView() string {
+	r, pos := f.clamp()
+	return string(r[:pos]) + "▌" + string(r[pos:])
+}
+
+// editKey applies a caret-editing key to the field. It reports whether the key
+// was an editing key (callers fall through to their own bindings otherwise).
+func (f *formField) editKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyLeft:
+		f.left()
+	case tea.KeyRight:
+		f.right()
+	case tea.KeyHome:
+		f.home()
+	case tea.KeyEnd:
+		f.end()
+	case tea.KeyBackspace:
+		f.backspace()
+	case tea.KeyDelete:
+		f.deleteForward()
+	case tea.KeySpace:
+		f.insert(" ")
+	case tea.KeyRunes:
+		f.insert(string(msg.Runes))
+	default:
+		return false
+	}
+	return true
+}
+
+// ---- formModel: delegate editing to the focused field ----
+
+func (f *formModel) focused() *formField { return &f.fields[f.focus] }
+
+func (f *formModel) typeRunes(s string) { f.focused().insert(s) }
+func (f *formModel) backspace()         { f.focused().backspace() }
+func (f *formModel) deleteForward()     { f.focused().deleteForward() }
+func (f *formModel) left()              { f.focused().left() }
+func (f *formModel) right()             { f.focused().right() }
+func (f *formModel) home()              { f.focused().home() }
+func (f *formModel) end()               { f.focused().end() }
 
 // focusEnd places the caret at the end of the focused field - the natural spot
 // when a field gains focus (e.g. on open or after tab).
@@ -133,16 +178,8 @@ func (f *formModel) render(w int) string {
 		marker, labelSty, valSty := "  ", formLabelStyle, formValStyle
 		if focused {
 			marker, labelSty, valSty = formMarkFocus.Render("▸ "), formLabelFocus, formValFocus
-			// Draw the caret inside the value at the cursor position.
-			r := []rune(val)
-			pos := fld.cursor
-			if pos < 0 {
-				pos = 0
-			}
-			if pos > len(r) {
-				pos = len(r)
-			}
-			val = string(r[:pos]) + "▌" + string(r[pos:])
+			// Draw the caret inside the (possibly masked) value.
+			val = formField{value: val, cursor: fld.cursor}.caretView()
 		}
 
 		// Truncate the plain value to the space left after the label, then style

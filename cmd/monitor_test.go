@@ -148,6 +148,65 @@ func TestWhyLinesPlanReview(t *testing.T) {
 	}
 }
 
+// A long free-form markdown plan must NOT flood the detail pane: whyLines shows
+// a one-line teaser and whyRowsFor caps the total rows regardless of content.
+func TestWhyLinesPlanReviewLongPlanIsCapped(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-43", State: store.StatePlanReview}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A 60-line markdown plan (the new free-form format).
+	longPlan := "## Approach\\nFirst line of the actual plan."
+	for i := 0; i < 60; i++ {
+		longPlan += fmt.Sprintf("\\n- detail line %d", i)
+	}
+	planJSON := `{"plan":"` + longPlan + `","confidence":"high","type":"feature"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := whyLines(s)
+	if len(lines) > 4 {
+		t.Errorf("plan-review whyLines should be a short teaser, got %d lines:\n%s",
+			len(lines), strings.Join(lines, "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "First line of the actual plan") {
+		t.Errorf("teaser should show the plan's first real line:\n%s", joined)
+	}
+	if strings.Contains(joined, "detail line 5") {
+		t.Errorf("teaser must not include the plan body:\n%s", joined)
+	}
+
+	// The render-level cap holds even for pathological content.
+	if rows := whyRowsFor(s, 80); len(rows) > 9 {
+		t.Errorf("whyRowsFor must cap rows, got %d", len(rows))
+	}
+}
+
+// Many questions collapse to a capped list with a "+N more" line.
+func TestWhyLinesQuestionsCapped(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	s := store.Session{Ticket: "K-44", State: "awaiting-answer"}
+	wt := paths.WorktreeFor(s.Repo, s.Ticket)
+	if err := os.MkdirAll(filepath.Join(wt, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"plan":"p","questions":["q1?","q2?","q3?","q4?","q5?","q6?"],"confidence":"high","type":"bug"}`
+	if err := os.WriteFile(filepath.Join(wt, ".agent", "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(whyLines(s), "\n")
+	if !strings.Contains(joined, "Q4") || strings.Contains(joined, "q5?") {
+		t.Errorf("questions should cap at 4:\n%s", joined)
+	}
+	if !strings.Contains(joined, "+2 more") {
+		t.Errorf("capped questions should say how many more:\n%s", joined)
+	}
+}
+
 // planMarkdownDoc builds a markdown doc from the worktree's plan.json.
 func TestPlanMarkdownDoc(t *testing.T) {
 	t.Setenv("MAGNETON_HOME", t.TempDir())
@@ -168,7 +227,7 @@ func TestPlanMarkdownDoc(t *testing.T) {
 	for _, want := range []string{
 		"# K-50 · Add topics",
 		"**Confidence:** high",
-		"## Approach", "Add topic discovery",
+		"Add topic discovery", // plan body is free-form markdown, included verbatim
 		"## Diagram", "Home --> Discover",
 		"## Steps", "1. Add topic field", "2. Run tests",
 		"## Open questions", "- Which screen?",

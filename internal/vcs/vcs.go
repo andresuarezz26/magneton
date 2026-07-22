@@ -70,21 +70,27 @@ const defaultPlanComment = `{{- if .Questions}}
 {{range .Questions}}- {{.}}
 {{end}}
 ----
-*Proposed plan (pending your answers):* {{.Plan}}
+*Proposed plan (pending your answers):*
+{{.Plan}}
 *Type:* {{.Type}} · *Confidence:* {{.Confidence}}
+{{- if .Steps}}
 
 *Steps:*
 {{range .Steps}}- {{.}}
 {{end}}
+{{- end}}
 {{- else}}
 🤖 *magneton plan for [{{.Ticket}}]*
 
-*Approach:* {{.Plan}}
+{{.Plan}}
 *Type:* {{.Type}} · *Confidence:* {{.Confidence}}
+{{- if .Steps}}
 
 *Steps:*
 {{range .Steps}}- {{.}}
-{{end}}No blockers - proceeding with implementation automatically.
+{{end}}
+{{- end}}
+No blockers - proceeding with implementation automatically.
 {{- end}}`
 
 func render(name, def string, data any) (string, error) {

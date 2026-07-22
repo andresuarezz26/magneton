@@ -36,6 +36,7 @@ type Task struct {
 	Store       *store.Store // optional; enables emulator coordination
 	Images      []string     // image files to make the agent see (pasted-content flow)
 	Base        string       // bare base branch name for stacked diffs; "" = default
+	Branch      string       // exact branch name (user-confirmed at creation); "" = derive from the repo pattern
 	ReviewPlan  bool         // pause after the plan stage for human approval (plan-review gate)
 	FromPlan    bool         // skip planning: implement straight from the existing plan.json
 }
@@ -81,7 +82,7 @@ func Run(t Task, h Hooks) Outcome {
 	}
 
 	repo := t.Repo
-	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 	anthropicKey := secrets.Get(secrets.Anthropic)
 
@@ -193,6 +194,7 @@ func Run(t Task, h Hooks) Outcome {
 		return Outcome{State: store.StateNeedsYou}
 	}
 	logf("[%s] plan (%s/%s): %s", t.Ticket, plan.Type, plan.Confidence, oneLine(plan.Plan, 120))
+	archivePlan(t.Ticket, t.Summary, plan, logf)
 
 	// Start emulator in the background, concurrent with the implement stage.
 	// We do this right after reading the plan so boot time overlaps with Claude.
@@ -385,6 +387,13 @@ func finishShip(t Task, h Hooks, worktree, branch string, attempts int, report *
 	if report != nil {
 		archiveReport(t.Ticket, report, logf)
 	}
+	// Archive the self-review verdict beside the report - like plan/report, its
+	// durable home is ~/.magneton, never the target repo.
+	if review, err := agent.ReadReview(worktree); err == nil && review != nil {
+		if data, jerr := json.MarshalIndent(review, "", "  "); jerr == nil {
+			_ = os.WriteFile(filepath.Join(paths.Reports(), t.Ticket+"-review.json"), data, 0o644)
+		}
+	}
 	git.UntrackAgentDir(worktree)
 
 	if git.HasChanges(worktree) {
@@ -490,6 +499,28 @@ func archiveReport(ticket string, r *agent.Report, logf func(string, ...interfac
 	}
 }
 
+// archivePlan persists the plan into magneton's own home right after planning:
+// ~/.magneton/plans/<ticket>.md (what the TUI's "View Plan" opens) plus the raw
+// .json. The worktree's .agent/ scratch stays git-excluded and disposable, so
+// the plan never lands in the target repo. Best-effort.
+func archivePlan(ticket, summary string, p *agent.Plan, logf func(string, ...interface{})) {
+	if err := os.MkdirAll(paths.Plans(), 0o755); err != nil {
+		logf("[%s] (warn) could not create plans dir: %v", ticket, err)
+		return
+	}
+	title := ticket
+	if summary != "" {
+		title += " · " + summary
+	}
+	if err := os.WriteFile(paths.PlanMDFor(ticket), []byte(agent.PlanMarkdown(title, p)), 0o644); err != nil {
+		logf("[%s] (warn) could not archive plan: %v", ticket, err)
+		return
+	}
+	if data, err := json.MarshalIndent(p, "", "  "); err == nil {
+		_ = os.WriteFile(paths.PlanJSONFor(ticket), data, 0o644)
+	}
+}
+
 // verifyWithAgent has the Claude session itself discover and run this project's
 // build + tests, then reads back the verdict the agent wrote into report.json.
 // When allowFix is true the agent may edit code to make it pass; when false
@@ -548,7 +579,7 @@ func resumeShip(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -631,7 +662,7 @@ func shipOnly(t Task, h Hooks) Outcome {
 		}
 	}
 	repo := t.Repo
-	branch := resolveBranch(repo.Branch, t.Ticket, t.Summary)
+	branch := branchFor(t)
 	worktree := paths.WorktreeFor(repo.Path, t.Ticket)
 
 	if !worktreeReady(worktree) {
@@ -782,9 +813,26 @@ func stageImages(t Task, worktree string, logf func(string, ...interface{})) str
 		strings.Join(refs, "\n- ")
 }
 
-// resolveBranch fills a repo's branch pattern for a ticket, substituting the
-// {ticket} (lowercased id) and {slug} (kebab-case title) placeholders.
-func resolveBranch(pattern, ticket, summary string) string {
+// branchFor picks the branch for a run: an explicit override (the name the user
+// confirmed at creation, via --branch) wins; else the branch recorded by a
+// previous run, so re-runs and resume/ship keep a customized name instead of
+// silently recomputing the pattern; else the repo pattern.
+func branchFor(t Task) string {
+	if t.Branch != "" {
+		return t.Branch
+	}
+	if t.Store != nil {
+		if sess, err := t.Store.Get(t.Ticket); err == nil && sess != nil && sess.Branch != "" {
+			return sess.Branch
+		}
+	}
+	return ResolveBranch(t.Repo.Branch, t.Ticket, t.Summary)
+}
+
+// ResolveBranch fills a repo's branch pattern for a ticket, substituting the
+// {ticket} (lowercased id) and {slug} (kebab-case title) placeholders. Exported
+// so the TUI can pre-fill the creation-time branch field with the same result.
+func ResolveBranch(pattern, ticket, summary string) string {
 	return strings.NewReplacer(
 		"{ticket}", strings.ToLower(ticket),
 		"{slug}", slugify(summary),

@@ -5,10 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
@@ -75,6 +78,11 @@ func agentActions(s store.Session) []paletteItem {
 			paletteItem{"plan-feedback", "Give feedback & re-plan", "tell it what to change; it plans again"},
 		)
 	}
+	// The plan .md (archived in ~/.magneton/plans/, or derivable from the
+	// worktree) opens externally in whatever handles markdown.
+	if planAvailable(s) {
+		items = append(items, paletteItem{"plan-md", "View Plan", "open the plan .md file"})
+	}
 	// Pause a live run: stop the agent but keep the worktree, dropping the ticket
 	// to NEEDS YOU so you can take over by hand (then Resume / Open a PR).
 	if active {
@@ -108,6 +116,57 @@ func agentActions(s store.Session) []paletteItem {
 		items = append(items, paletteItem{"resume", "Resume from last stage", "re-run verification on your fix, then open the PR"})
 	}
 	return items
+}
+
+// planAvailable reports whether a plan can be shown for the session: the durable
+// archive in ~/.magneton/plans/ or a plan.json still in the worktree. Cheap
+// stat-only checks - this runs on every palette open.
+func planAvailable(s store.Session) bool {
+	if _, err := os.Stat(paths.PlanMDFor(s.Ticket)); err == nil {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(paths.WorktreeFor(s.Repo, s.Ticket), ".agent", "plan.json"))
+	return err == nil
+}
+
+// planOpenedMsg is returned after handing the plan .md to the OS opener.
+type planOpenedMsg struct {
+	path string
+	err  error
+}
+
+// openPlanMD opens the ticket's plan .md externally (macOS `open` / linux
+// `xdg-open`). The durable archive is preferred; when only the worktree's
+// plan.json exists (runs from before the archive existed) the .md is generated
+// into ~/.magneton/plans/ first.
+func openPlanMD(s store.Session) tea.Cmd {
+	return func() tea.Msg {
+		path := paths.PlanMDFor(s.Ticket)
+		if _, err := os.Stat(path); err != nil {
+			plan, rerr := agent.ReadPlan(paths.WorktreeFor(s.Repo, s.Ticket))
+			if rerr != nil || plan == nil {
+				return planOpenedMsg{err: fmt.Errorf("no plan found for %s", s.Ticket)}
+			}
+			title := s.Ticket
+			if s.Summary != "" {
+				title += " · " + s.Summary
+			}
+			if err := os.MkdirAll(paths.Plans(), 0o755); err != nil {
+				return planOpenedMsg{err: err}
+			}
+			if err := os.WriteFile(path, []byte(agent.PlanMarkdown(title, plan)), 0o644); err != nil {
+				return planOpenedMsg{err: err}
+			}
+		}
+		opener := "xdg-open"
+		if runtime.GOOS == "darwin" {
+			opener = "open"
+		}
+		if err := exec.Command(opener, path).Start(); err != nil {
+			return planOpenedMsg{path: path, err: err}
+		}
+		return planOpenedMsg{path: path}
+	}
 }
 
 // claudeClosedMsg is returned after launching a Claude Code terminal.
@@ -190,6 +249,11 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		if s := m.selected(); s != nil {
 			return m.openPlanView(*s)
 		}
+	case "plan-md":
+		if s := m.selected(); s != nil {
+			m.notice = "opening plan for " + s.Ticket + "…"
+			return m, openPlanMD(*s)
+		}
 	case "approve-plan":
 		if s := m.selected(); s != nil {
 			m.view = viewDashboard // leave the plan viewer; the run resumes now
@@ -267,7 +331,9 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		m.runText = ""
 		m.runTickets = nil
 		m.runIDPrompt = -1
+		m.runBranchPrompt = -1
 		m.runImgPrompt = -1
+		m.promptCursor = 0
 		m.runReviewPrompt = -1
 		m.notice = ""
 		// With a single input method (no Jira configured) the picker is just an
@@ -275,6 +341,10 @@ func (m monitorModel) doAction(id string) (tea.Model, tea.Cmd) {
 		if methods := m.runMethods(); len(methods) == 1 {
 			m.runMode = methods[0].mode
 			m.view = viewRunInput
+			if m.runMode == "content" {
+				m = m.withContentEditor()
+				return m, textarea.Blink
+			}
 		} else {
 			m.view = viewRunMethod
 		}

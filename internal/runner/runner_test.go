@@ -1,12 +1,16 @@
 package runner
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/andresuarezz26/magneton/internal/agent"
 	"github.com/andresuarezz26/magneton/internal/build"
 	"github.com/andresuarezz26/magneton/internal/config"
+	"github.com/andresuarezz26/magneton/internal/paths"
 	"github.com/andresuarezz26/magneton/internal/store"
 )
 
@@ -121,9 +125,51 @@ func TestResolveBranch(t *testing.T) {
 		"no tokens": {"static-branch", "PROJ-4", "x", "static-branch"},
 	}
 	for name, c := range cases {
-		if got := resolveBranch(c.pattern, c.ticket, c.summary); got != c.want {
-			t.Errorf("%s: resolveBranch(%q) = %q, want %q", name, c.pattern, got, c.want)
+		if got := ResolveBranch(c.pattern, c.ticket, c.summary); got != c.want {
+			t.Errorf("%s: ResolveBranch(%q) = %q, want %q", name, c.pattern, got, c.want)
 		}
+	}
+}
+
+// archivePlan writes the durable plan copies (md + json) into magneton's own
+// home - they must never rely on the worktree's git-excluded .agent/ scratch.
+func TestArchivePlan(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	plan := &agent.Plan{Plan: "do the thing", Steps: []string{"a", "b"}, Confidence: "high", Type: "bug"}
+	archivePlan("PROJ-7", "Fix crash", plan, func(string, ...interface{}) {})
+
+	md, err := os.ReadFile(paths.PlanMDFor("PROJ-7"))
+	if err != nil {
+		t.Fatalf("plan .md not archived: %v", err)
+	}
+	for _, want := range []string{"# PROJ-7 · Fix crash", "do the thing", "1. a"} {
+		if !strings.Contains(string(md), want) {
+			t.Errorf("archived md missing %q:\n%s", want, md)
+		}
+	}
+	raw, err := os.ReadFile(paths.PlanJSONFor("PROJ-7"))
+	if err != nil {
+		t.Fatalf("plan .json not archived: %v", err)
+	}
+	var back agent.Plan
+	if jerr := json.Unmarshal(raw, &back); jerr != nil || back.Plan != "do the thing" {
+		t.Errorf("archived json should round-trip, got %+v (%v)", back, jerr)
+	}
+}
+
+// branchFor: an explicit branch override wins over the repo pattern; without
+// one (and no store) the pattern is resolved as before.
+func TestBranchForOverride(t *testing.T) {
+	task := Task{
+		Ticket: "PROJ-9", Summary: "Fix crash",
+		Repo: &config.Repo{Branch: "{ticket}-{slug}"},
+	}
+	if got := branchFor(task); got != "proj-9-fix-crash" {
+		t.Errorf("no override should resolve the pattern, got %q", got)
+	}
+	task.Branch = "magneton/PROJ-9-custom"
+	if got := branchFor(task); got != "magneton/PROJ-9-custom" {
+		t.Errorf("override should be used verbatim, got %q", got)
 	}
 }
 

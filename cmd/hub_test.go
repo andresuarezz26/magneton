@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -125,6 +128,414 @@ func TestReviewPickerCursorFollowsConfig(t *testing.T) {
 	nm, _ = base.openReviewPicker(0)
 	if got := nm.(monitorModel).reviewCursor; got != 1 {
 		t.Errorf("review_plans=false should pre-select No (1), got %d", got)
+	}
+}
+
+// Pasting content opens the id prompt (step 1) pre-filled with the detected
+// id; confirming it computes the branch pre-fill from the CONFIRMED id and
+// opens the branch prompt (step 2).
+func TestContentFlowIDThenBranch(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(&config.Config{
+		Repos: []config.Repo{{Path: "/r", Branch: "magneton/{ticket}"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1,
+	}
+	nm, _ := m.addContentTicket("PROJ-123 Fix the crash\nmore detail")
+	hub := nm.(monitorModel)
+	if len(hub.runTickets) != 1 {
+		t.Fatalf("expected 1 chip, got %+v", hub.runTickets)
+	}
+	if hub.runIDPrompt != 0 || hub.runBranchPrompt != -1 {
+		t.Fatalf("paste should open the id prompt first: idPrompt=%d branchPrompt=%d",
+			hub.runIDPrompt, hub.runBranchPrompt)
+	}
+	if hub.runTickets[0].id != "PROJ-123" {
+		t.Errorf("detected id should pre-fill, got %q", hub.runTickets[0].id)
+	}
+	if hub.runTickets[0].branch != "" {
+		t.Errorf("branch must not be set before the id is confirmed, got %q", hub.runTickets[0].branch)
+	}
+
+	// The user fixes the id, then confirms: the branch pre-fill must use the
+	// EDITED id, and the flow advances to the branch prompt.
+	hub.runTickets[0].id = "PROJ-777"
+	nm, _ = hub.updateRunIDPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	hub = nm.(monitorModel)
+	if hub.runIDPrompt != -1 || hub.runBranchPrompt != 0 {
+		t.Errorf("id Enter should advance to the branch prompt: idPrompt=%d branchPrompt=%d",
+			hub.runIDPrompt, hub.runBranchPrompt)
+	}
+	if got := hub.runTickets[0].branch; got != "magneton/proj-777" {
+		t.Errorf("branch pre-fill should use the confirmed id: got %q, want %q", got, "magneton/proj-777")
+	}
+}
+
+// Content mode is a real multi-line editor: Enter inserts a NEW LINE (it never
+// creates a chip), and ctrl+d confirms the composed markdown into a chip that
+// enters the id-confirm step, resetting the editor.
+func TestContentEditorEnterIsNewlineCtrlDConfirms(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1,
+	}.withContentEditor()
+	step := func(msg tea.KeyMsg) {
+		nm, _ := m.updateRunContent(msg)
+		m = nm.(monitorModel)
+	}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("PROJ-5 Fix the crash")})
+	step(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.runTickets) != 0 {
+		t.Fatalf("Enter must insert a newline, not create a chip: %+v", m.runTickets)
+	}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("More detail")})
+	if got := m.content.Value(); !strings.Contains(got, "\n") {
+		t.Fatalf("editor should be multi-line after Enter, got %q", got)
+	}
+	step(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if len(m.runTickets) != 1 || m.runTickets[0].kind != "content" {
+		t.Fatalf("ctrl+d should create a content chip, got %+v", m.runTickets)
+	}
+	if m.runTickets[0].id != "PROJ-5" || m.runIDPrompt != 0 {
+		t.Errorf("chip should enter the id-confirm step: id=%q idPrompt=%d",
+			m.runTickets[0].id, m.runIDPrompt)
+	}
+	if m.runTickets[0].lines != 2 {
+		t.Errorf("chip should carry both lines, got %d", m.runTickets[0].lines)
+	}
+	if m.content.Value() != "" {
+		t.Errorf("editor should reset after confirm, got %q", m.content.Value())
+	}
+}
+
+// Esc in the editor steps out to the action bar (it must NOT cancel and
+// destroy the draft); Enter on Continue confirms the chip; Esc on the bar
+// returns to editing; Discard is the only way Esc-ish input drops the draft.
+func TestContentEditorEscFocusesActionBar(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1,
+	}.withContentEditor()
+	step := func(msg tea.KeyMsg) {
+		nm, _ := m.updateRunContent(msg)
+		m = nm.(monitorModel)
+	}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("PROJ-8 A draft")})
+	step(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.view != viewRunInput || m.content == nil || m.content.Value() != "PROJ-8 A draft" {
+		t.Fatal("Esc must keep the draft and stay on the screen")
+	}
+	if !m.contentBar || m.contentBtn != 0 {
+		t.Fatalf("Esc should focus the action bar on Continue: bar=%v btn=%d", m.contentBar, m.contentBtn)
+	}
+
+	// Esc on the bar → back to editing, draft intact.
+	step(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.contentBar || m.content.Value() != "PROJ-8 A draft" {
+		t.Fatal("Esc on the bar should return to editing with the draft intact")
+	}
+
+	// Esc → Enter (Continue) confirms the ticket into the id step.
+	step(tea.KeyMsg{Type: tea.KeyEsc})
+	step(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.runTickets) != 1 || m.runTickets[0].id != "PROJ-8" || m.runIDPrompt != 0 {
+		t.Fatalf("Continue should confirm the chip into the id step, got %+v idPrompt=%d",
+			m.runTickets, m.runIDPrompt)
+	}
+}
+
+// Discard on the action bar cancels the whole creation.
+func TestContentEditorDiscard(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1,
+	}.withContentEditor()
+	step := func(msg tea.KeyMsg) {
+		nm, _ := m.updateRunContent(msg)
+		m = nm.(monitorModel)
+	}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("scrap this")})
+	step(tea.KeyMsg{Type: tea.KeyEsc})
+	step(tea.KeyMsg{Type: tea.KeyRight})
+	step(tea.KeyMsg{Type: tea.KeyRight})
+	if m.contentBtn != 2 {
+		t.Fatalf("→→ should land on Discard, got btn=%d", m.contentBtn)
+	}
+	step(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.view != viewDashboard || m.runTickets != nil || m.content != nil {
+		t.Errorf("Discard should cancel the creation: view=%d tickets=%+v", m.view, m.runTickets)
+	}
+}
+
+// A paste lands IN the editor (for review/editing) instead of instantly
+// becoming a chip, and ctrl+p toggles the markdown preview; esc in the preview
+// returns to editing rather than cancelling the creation.
+func TestContentEditorPasteAndPreview(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runIDPrompt: -1, runBranchPrompt: -1, runImgPrompt: -1,
+	}.withContentEditor()
+	step := func(msg tea.KeyMsg) {
+		nm, _ := m.updateRunContent(msg)
+		m = nm.(monitorModel)
+	}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("# Title\rpasted body"), Paste: true})
+	if len(m.runTickets) != 0 {
+		t.Fatalf("paste must fill the editor, not create a chip: %+v", m.runTickets)
+	}
+	if got := m.content.Value(); got != "# Title\npasted body" {
+		t.Fatalf("paste should land in the editor (\\r normalized), got %q", got)
+	}
+	step(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if !m.contentPreview || len(m.ticketLines) == 0 {
+		t.Fatalf("ctrl+p should open the rendered preview: preview=%v lines=%d",
+			m.contentPreview, len(m.ticketLines))
+	}
+	step(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.contentPreview {
+		t.Error("esc in preview should return to editing")
+	}
+	if m.view != viewRunInput || m.content == nil {
+		t.Error("esc in preview must not cancel the creation")
+	}
+}
+
+// Enter on an emptied id field must not advance - the id is required (it names
+// the dashboard row, worktree, and logs).
+func TestIDPromptEnterRejectsEmpty(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:  []pendingTicket{{kind: "content", title: "t", lines: 1, id: ""}},
+		runIDPrompt: 0, runBranchPrompt: -1, runImgPrompt: -1,
+	}
+	nm, _ := m.updateRunIDPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if hub.runIDPrompt != 0 || hub.runBranchPrompt != -1 {
+		t.Errorf("empty id should keep the prompt open: idPrompt=%d branchPrompt=%d",
+			hub.runIDPrompt, hub.runBranchPrompt)
+	}
+}
+
+// Esc on the id prompt drops the chip entirely.
+func TestIDPromptEscDropsChip(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:  []pendingTicket{{kind: "content", title: "t", lines: 1, id: "LOCAL-9"}},
+		runIDPrompt: 0, runBranchPrompt: -1, runImgPrompt: -1,
+	}
+	nm, _ := m.updateRunIDPrompt(tea.KeyMsg{Type: tea.KeyEsc})
+	hub := nm.(monitorModel)
+	if len(hub.runTickets) != 0 || hub.runIDPrompt != -1 {
+		t.Errorf("Esc should drop the chip: tickets=%+v idPrompt=%d",
+			hub.runTickets, hub.runIDPrompt)
+	}
+}
+
+// No detectable ticket id → the pattern expands with the PASTED fallback id
+// (matching writePastedTicket), never an empty field.
+func TestInferBranchNoIDFallsBack(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	if got := inferBranch("", "Fix the crash"); got != "pasted-fix-the-crash" {
+		t.Errorf("inferBranch fallback: got %q, want %q", got, "pasted-fix-the-crash")
+	}
+}
+
+// Enter on the branch prompt confirms the (possibly edited) name - collapsing
+// whitespace, which git forbids in branch names - and advances to the image
+// step. The confirmed value is final; it is passed through as --branch.
+func TestBranchPromptEnterAdvances(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:      []pendingTicket{{id: "LOCAL-9", kind: "content", title: "t", lines: 1, branch: " magneton/local-9  fix "}},
+		runBranchPrompt: 0, runImgPrompt: -1,
+	}
+	nm, _ := m.updateRunBranchPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if got := hub.runTickets[0].branch; got != "magneton/local-9-fix" {
+		t.Errorf("confirmed branch: got %q", got)
+	}
+	if hub.runBranchPrompt != -1 || hub.runImgPrompt != 0 {
+		t.Errorf("Enter should advance to images: branchPrompt=%d imgPrompt=%d",
+			hub.runBranchPrompt, hub.runImgPrompt)
+	}
+}
+
+// The branch field supports in-place caret editing: ←→ move the cursor and
+// typing inserts at it (shared formField editor), so the middle of the name
+// can be fixed without deleting from the end.
+func TestBranchPromptCursorEditing(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:      []pendingTicket{{id: "LOCAL-9", kind: "content", title: "t", lines: 1, branch: "main"}},
+		runIDPrompt:     -1,
+		runBranchPrompt: 0, runImgPrompt: -1,
+		promptCursor: len("main"),
+	}
+	step := func(msg tea.KeyMsg) {
+		nm, _ := m.updateRunBranchPrompt(msg)
+		m = nm.(monitorModel)
+	}
+	step(tea.KeyMsg{Type: tea.KeyLeft})
+	step(tea.KeyMsg{Type: tea.KeyLeft})
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("XY")})
+	if got := m.runTickets[0].branch; got != "maXYin" {
+		t.Errorf("insert mid-value = %q, want %q", got, "maXYin")
+	}
+	step(tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.runTickets[0].branch; got != "maXin" {
+		t.Errorf("backspace mid-value = %q, want %q", got, "maXin")
+	}
+	step(tea.KeyMsg{Type: tea.KeyHome})
+	step(tea.KeyMsg{Type: tea.KeyDelete})
+	if got := m.runTickets[0].branch; got != "aXin" {
+		t.Errorf("delete at home = %q, want %q", got, "aXin")
+	}
+}
+
+// Enter on an emptied branch field must not advance - the branch is required.
+func TestBranchPromptEnterRejectsEmpty(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:      []pendingTicket{{id: "LOCAL-9", kind: "content", title: "t", lines: 1, branch: "   "}},
+		runBranchPrompt: 0, runImgPrompt: -1,
+	}
+	nm, _ := m.updateRunBranchPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	hub := nm.(monitorModel)
+	if hub.runBranchPrompt != 0 || hub.runImgPrompt != -1 {
+		t.Errorf("empty branch should keep the prompt open: branchPrompt=%d imgPrompt=%d",
+			hub.runBranchPrompt, hub.runImgPrompt)
+	}
+}
+
+// The branch prompt screen: no chip row, the full ticket content rendered
+// above, and the header sits directly above the branch field.
+func TestBranchPromptRender(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content", height: 30,
+		runTickets: []pendingTicket{{
+			id: "LOCAL-9", kind: "content", title: "t", lines: 2,
+			body: "Title: fix the crash\n\nDetails here", branch: "magneton/local-9",
+		}},
+		runIDPrompt: -1, runBranchPrompt: 0, runImgPrompt: -1, runStackPrompt: -1, runReviewPrompt: -1,
+		promptCursor: len("magneton/local-9"), // caret at the end, as when the prompt opens
+	}
+	// Strip ANSI styling: glamour splits words across escape-coded segments,
+	// which would defeat plain substring checks.
+	out := regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(m.renderRunInput(80), "")
+	if !strings.Contains(out, "Update or Approve the branch name") {
+		t.Errorf("header missing:\n%s", out)
+	}
+	if !strings.Contains(out, "branch › magneton/local-9") {
+		t.Errorf("branch field missing:\n%s", out)
+	}
+	if !strings.Contains(out, "Details here") {
+		t.Errorf("full ticket content should render:\n%s", out)
+	}
+	if strings.Contains(out, "· 2 lines") {
+		t.Errorf("chip row must not render on the branch prompt:\n%s", out)
+	}
+	// The header must sit below the content, directly above the branch field.
+	if strings.Index(out, "Update or Approve") < strings.Index(out, "Details here") {
+		t.Errorf("header should render below the ticket content:\n%s", out)
+	}
+}
+
+// applyTicketEdit folds an editor rewrite back into the chip and re-infers the
+// branch when the user hadn't customized it.
+func TestApplyTicketEditReinfersBranch(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(&config.Config{
+		Repos: []config.Repo{{Path: "/r", Branch: "magneton/{ticket}"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "edited.md")
+	if err := os.WriteFile(path, []byte("PROJ-77 New title\n\nnew body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := monitorModel{
+		runTickets: []pendingTicket{{
+			id: "PROJ-1", kind: "content", title: "Old title", lines: 1,
+			body: "PROJ-1 Old title", branch: inferBranch("PROJ-1", "Old title"),
+		}},
+		runBranchPrompt: 0,
+	}
+	nm, _ := m.applyTicketEdit(ticketEditedMsg{i: 0, path: path})
+	hub := nm.(monitorModel)
+	got := hub.runTickets[0]
+	if got.id != "PROJ-77" || got.lines != 3 || !strings.Contains(got.body, "new body") {
+		t.Errorf("edit not applied: %+v", got)
+	}
+	if got.branch != "magneton/proj-77" {
+		t.Errorf("uncustomized branch should re-infer, got %q", got.branch)
+	}
+}
+
+// applyTicketEdit must NOT overwrite a branch the user already customized.
+func TestApplyTicketEditKeepsCustomBranch(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "edited.md")
+	if err := os.WriteFile(path, []byte("PROJ-77 New title"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := monitorModel{
+		runTickets: []pendingTicket{{
+			id: "PROJ-1", kind: "content", title: "Old title", lines: 1,
+			body: "PROJ-1 Old title", branch: "my/custom-name",
+		}},
+		runBranchPrompt: 0,
+	}
+	nm, _ := m.applyTicketEdit(ticketEditedMsg{i: 0, path: path})
+	if got := nm.(monitorModel).runTickets[0].branch; got != "my/custom-name" {
+		t.Errorf("customized branch must survive an edit, got %q", got)
+	}
+}
+
+// An edit that empties the ticket is discarded (the chip keeps its old body).
+func TestApplyTicketEditRejectsEmpty(t *testing.T) {
+	t.Setenv("MAGNETON_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "edited.md")
+	if err := os.WriteFile(path, []byte("   \n  "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := monitorModel{
+		runTickets:      []pendingTicket{{id: "PROJ-1", kind: "content", body: "keep me", branch: "b"}},
+		runBranchPrompt: 0,
+	}
+	nm, _ := m.applyTicketEdit(ticketEditedMsg{i: 0, path: path})
+	hub := nm.(monitorModel)
+	if hub.runTickets[0].body != "keep me" {
+		t.Errorf("empty edit should be discarded, got body %q", hub.runTickets[0].body)
+	}
+	if hub.notice == "" {
+		t.Error("discarding an empty edit should set a notice")
+	}
+}
+
+// Esc on the branch prompt drops the chip entirely.
+func TestBranchPromptEscDropsChip(t *testing.T) {
+	m := monitorModel{
+		view: viewRunInput, runMode: "content",
+		runTickets:      []pendingTicket{{id: "LOCAL-9", kind: "content", title: "t", lines: 1, branch: "b"}},
+		runBranchPrompt: 0, runImgPrompt: -1,
+	}
+	nm, _ := m.updateRunBranchPrompt(tea.KeyMsg{Type: tea.KeyEsc})
+	hub := nm.(monitorModel)
+	if len(hub.runTickets) != 0 || hub.runBranchPrompt != -1 {
+		t.Errorf("Esc should drop the chip: tickets=%+v branchPrompt=%d",
+			hub.runTickets, hub.runBranchPrompt)
 	}
 }
 
